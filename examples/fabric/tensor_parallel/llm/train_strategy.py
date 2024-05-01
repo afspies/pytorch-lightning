@@ -1,5 +1,3 @@
-# Code dapted from official PyTorch example at
-# https://github.com/pytorch/examples/blob/main/distributed/tensor_parallelism
 
 import lightning as L
 import torch
@@ -7,8 +5,21 @@ import torch.nn.functional as F
 
 from lightning.fabric.strategies import ModelParallelStrategy
 from torch.distributed.tensor.parallel import loss_parallel
+from torch.utils.data import Dataset, DataLoader
 
 from model import ModelArgs, Transformer, parallelize
+
+
+class RandomTokenDataset(Dataset):
+    def __init__(self, vocab_size: int, seq_length: int):
+        self.vocab_size = vocab_size
+        self.seq_length = seq_length
+
+    def __len__(self):
+        return 64
+
+    def __getitem__(self, item):
+        return torch.randint(self.vocab_size, size=(self.seq_length, ))
 
 
 fabric = L.Fabric(
@@ -24,8 +35,8 @@ fabric = L.Fabric(
 fabric.launch()
 
 device_mesh = fabric.strategy.device_mesh
-dp_mesh = device_mesh["data_parallel"]
-tp_mesh = device_mesh["tensor_parallel"]
+# dp_mesh = device_mesh["data_parallel"]
+# tp_mesh = device_mesh["tensor_parallel"]
 
 model_args = ModelArgs(dim=256, n_layers=2, n_heads=16, vocab_size=32000)
 
@@ -44,17 +55,19 @@ model, optimizer = fabric.setup(model, optimizer)
 # All inputs in a tensor-parallel group need to be the same
 # Since we don't have a dataloader here, we can simulate this by
 # setting the seed
-L.seed_everything(dp_mesh.get_local_rank())
+# L.seed_everything(dp_mesh.get_local_rank())
+
+dataset = RandomTokenDataset(vocab_size=model_args.vocab_size, seq_length=129)
+dataloader = DataLoader(dataset, batch_size=8)
+dataloader = fabric.setup_dataloaders(dataloader)
 
 fabric.print("Starting training ...")
-num_iterations = 10
-batch_size = 8
 
 # Simplified training loop
-for i in range(num_iterations):
-    tokens = torch.randint(model_args.vocab_size, size=(batch_size, 129), device=fabric.device)
-    inputs = tokens[:, :-1]
-    labels = tokens[:, 1:]
+for i, batch in enumerate(dataloader):
+    # tokens = torch.randint(model_args.vocab_size, size=(batch_size, 129), device=fabric.device)
+    inputs = batch[:, :-1]
+    labels = batch[:, 1:]
 
     output = model(inputs)
 
@@ -66,11 +79,12 @@ for i in range(num_iterations):
     fabric.print(f"Iteration {i} complete")
     
 
+# TODO
 # Save a (distributed) checkpoint
 # fabric.save("checkpoint.pt", {"model": model})
 
 fabric.print("Training successfully completed!")
 fabric.print(f"Peak memory usage: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
 
-# Avoid new warning
+# Avoid warning in PyTorch 2.4
 torch.distributed.destroy_process_group()
