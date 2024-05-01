@@ -7,7 +7,7 @@ from typing import Optional, Tuple
 import torch
 import torch.nn.functional as F
 from torch import nn
-from torch.distributed._composable import fully_shard
+from torch.distributed._composable.fsdp.fully_shard import fully_shard
 from torch.distributed._composable.fsdp import MixedPrecisionPolicy
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import checkpoint_wrapper
 from torch.distributed.device_mesh import DeviceMesh
