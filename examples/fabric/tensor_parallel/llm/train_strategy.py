@@ -1,4 +1,3 @@
-
 import lightning as L
 import torch
 import torch.nn.functional as F
@@ -14,12 +13,17 @@ class RandomTokenDataset(Dataset):
     def __init__(self, vocab_size: int, seq_length: int):
         self.vocab_size = vocab_size
         self.seq_length = seq_length
+        self.tokens = torch.randint(
+            self.vocab_size, 
+            size=(len(self), self.seq_length),
+            generator=torch.Generator().manual_seed(42),
+        )
 
     def __len__(self) -> int:
         return 128
 
     def __getitem__(self, item: int):
-        return torch.randint(self.vocab_size, size=(self.seq_length,))
+        return self.tokens[item]
 
 
 fabric = L.Fabric(
