@@ -17,7 +17,7 @@ from torch.distributed.tensor.parallel import (
     parallelize_module,
 )
 
-from model import ModelArgs, Transformer, TransformerBlock
+from model import ModelArgs, Transformer, TransformerBlock, parallelize
 
 # Define the tensor parallel size
 # tensor_parallel_size = 4
@@ -43,51 +43,53 @@ model_args = ModelArgs(dim=256, n_layers=2, n_heads=16, vocab_size=32000)
 with fabric.init_module():
     model = Transformer(model_args)
 model.init_weights()
+#
+# # Parallelize the first embedding and the last linear out projection
+# plan = {
+#     "tok_embeddings": RowwiseParallel(
+#         input_layouts=Replicate(),
+#     ),
+#     "output": ColwiseParallel(input_layouts=Shard(1), output_layouts=Replicate()),
+#     "norm": SequenceParallel(),
+#     "layers.0": PrepareModuleInput(
+#         input_layouts=(Replicate(), None),
+#         desired_input_layouts=(Shard(1), None),
+#         use_local_output=True,
+#     ),
+# }
+# model = parallelize_module(model, tp_mesh, plan)
+#
+# # Parallelize each transformer block
+# for transformer_block in model.layers:
+#     plan = {
+#         "attention": PrepareModuleInput(
+#             input_layouts=(Shard(1), None),
+#             desired_input_layouts=(Replicate(), None),
+#         ),
+#         "attention.wq": ColwiseParallel(),
+#         "attention.wk": ColwiseParallel(),
+#         "attention.wv": ColwiseParallel(),
+#         "attention.wo": RowwiseParallel(output_layouts=Shard(1)),
+#         "attention_norm": SequenceParallel(),
+#         "feed_forward": PrepareModuleInput(
+#             input_layouts=(Shard(1),),
+#             desired_input_layouts=(Replicate(),),
+#         ),
+#         "feed_forward.w1": ColwiseParallel(),
+#         "feed_forward.w2": RowwiseParallel(output_layouts=Shard(1)),
+#         "feed_forward.w3": ColwiseParallel(),
+#         "ffn_norm": SequenceParallel(),
+#     }
+#
+#     # Adjust attention module to use the local number of heads
+#     attn_layer = transformer_block.attention
+#     attn_layer.n_heads = attn_layer.n_heads // tp_mesh.size()
+#     attn_layer.n_kv_heads = attn_layer.n_kv_heads // tp_mesh.size()
+#
+#     # Apply the plan for the current transformer block
+#     parallelize_module(transformer_block, tp_mesh, plan)
 
-# Parallelize the first embedding and the last linear out projection
-plan = {
-    "tok_embeddings": RowwiseParallel(
-        input_layouts=Replicate(),
-    ),
-    "output": ColwiseParallel(input_layouts=Shard(1), output_layouts=Replicate()),
-    "norm": SequenceParallel(),
-    "layers.0": PrepareModuleInput(
-        input_layouts=(Replicate(), None),
-        desired_input_layouts=(Shard(1), None),
-        use_local_output=True,
-    ),
-}
-model = parallelize_module(model, tp_mesh, plan)
-
-# Parallelize each transformer block
-for transformer_block in model.layers:
-    plan = {
-        "attention": PrepareModuleInput(
-            input_layouts=(Shard(1), None),
-            desired_input_layouts=(Replicate(), None),
-        ),
-        "attention.wq": ColwiseParallel(),
-        "attention.wk": ColwiseParallel(),
-        "attention.wv": ColwiseParallel(),
-        "attention.wo": RowwiseParallel(output_layouts=Shard(1)),
-        "attention_norm": SequenceParallel(),
-        "feed_forward": PrepareModuleInput(
-            input_layouts=(Shard(1),),
-            desired_input_layouts=(Replicate(),),
-        ),
-        "feed_forward.w1": ColwiseParallel(),
-        "feed_forward.w2": RowwiseParallel(output_layouts=Shard(1)),
-        "feed_forward.w3": ColwiseParallel(),
-        "ffn_norm": SequenceParallel(),
-    }
-
-    # Adjust attention module to use the local number of heads
-    attn_layer = transformer_block.attention
-    attn_layer.n_heads = attn_layer.n_heads // tp_mesh.size()
-    attn_layer.n_kv_heads = attn_layer.n_kv_heads // tp_mesh.size()
-
-    # Apply the plan for the current transformer block
-    parallelize_module(transformer_block, tp_mesh, plan)
+model = parallelize(model, fabric.strategy.device_mesh)
 
 
 # Define the optimizer
