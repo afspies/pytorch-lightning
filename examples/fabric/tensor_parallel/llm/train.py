@@ -17,7 +17,7 @@ from torch.distributed.tensor.parallel import (
     parallelize_module,
 )
 
-from model import ModelArgs, Transformer
+from model import ModelArgs, Transformer, TransformerBlock
 
 
 # Dummy launch to init distributed
@@ -40,7 +40,11 @@ dp_mesh = device_mesh["dp"]
 fabric = L.Fabric(
     accelerator="cuda",
     devices="auto",
-    strategy=FSDPStrategy(device_mesh=dp_mesh),
+    strategy=FSDPStrategy(
+        device_mesh=dp_mesh,
+        auto_wrap_policy={TransformerBlock},
+        state_dict_type="sharded",
+    ),
 )
 fabric._launched = True
 
@@ -126,6 +130,10 @@ for i in range(num_iterations):
     fabric.backward(loss)
     optimizer.step()
     fabric.print(f"Iteration {i} complete")
+    
+
+# Save a (distributed) checkpoint
+fabric.save("checkpoint.pt", {"model": model})
 
 fabric.print("Training successfully completed!")
 fabric.print(f"Peak memory usage: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
