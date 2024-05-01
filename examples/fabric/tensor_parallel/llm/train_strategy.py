@@ -30,6 +30,9 @@ fabric = L.Fabric(
     accelerator="cuda",
     devices="auto",
     strategy=ModelParallelStrategy(
+        # User-defined function that applies the desired parallelizations specific to the model
+        # (TP, FSDP2, activation checkpointing, ...)
+        parallelize_fn=parallelize,
         # Define the size of the 2D parallelism
         # Set to "auto" to apply TP intra-node and DP inter-node
         data_parallel_size=2,
@@ -38,17 +41,10 @@ fabric = L.Fabric(
 )
 fabric.launch()
 
-# Access the device mesh if needed
-device_mesh = fabric.strategy.device_mesh
-
 # Initialize the model. TODO: Meta-device support
 model_args = ModelArgs(dim=256, n_layers=2, n_heads=16, vocab_size=32000)
 with fabric.init_module():
     model = Transformer(model_args)
-
-# Applies parallelization specific to the model (TP, FSDP2, activation checkpointing, ...)
-model = parallelize(model, device_mesh)
-model.init_weights()
 
 # Define the optimizer
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-3, foreach=True)
@@ -56,6 +52,9 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=3e-3, foreach=True)
 # Set up model and optimizer
 model, optimizer = fabric.setup(model, optimizer)
 
+model.init_weights()
+
+# Define dataset/dataloader
 dataset = RandomTokenDataset(vocab_size=model_args.vocab_size, seq_length=129)
 dataloader = DataLoader(dataset, batch_size=8)
 

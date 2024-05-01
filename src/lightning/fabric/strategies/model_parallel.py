@@ -88,12 +88,14 @@ class ModelParallelStrategy(ParallelStrategy):
 
     def __init__(
         self,
+        parallelize_fn: Callable[[Module, DeviceMesh], Module],
         data_parallel_size: Union[Literal["auto"], int] = "auto",
         tensor_parallel_size:  Union[Literal["auto"], int] = "auto",
         process_group_backend: Optional[str] = None,
         timeout: Optional[timedelta] = default_pg_timeout,
     ) -> None:
         super().__init__()
+        self._parallelize_fn = parallelize_fn
         self._data_parallel_size = data_parallel_size
         self._tensor_parallel_size = tensor_parallel_size
         self._num_nodes = 1
@@ -162,12 +164,14 @@ class ModelParallelStrategy(ParallelStrategy):
 
     @override
     def setup_module(self, module: Module) -> Module:
+        module = self._parallelize_fn(module, self.device_mesh)
         # TODO
         # _move_torchmetrics_to_device(module, self.root_device)
         return module
 
     @override
     def module_to_device(self, module: Module) -> None:
+        # TODO
         pass
 
     @override
