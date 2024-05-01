@@ -3,6 +3,8 @@
 
 import lightning as L
 import torch
+import torch.nn.functional as F
+
 from lightning.fabric.strategies import FSDPStrategy
 from torch.distributed._tensor import Replicate, Shard
 from torch.distributed.device_mesh import init_device_mesh
@@ -11,7 +13,8 @@ from torch.distributed.tensor.parallel import (
     PrepareModuleInput,
     RowwiseParallel,
     SequenceParallel,
-    parallelize_module
+    loss_parallel,
+    parallelize_module,
 )
 
 from model import ModelArgs, Transformer
@@ -46,6 +49,7 @@ model_args = ModelArgs(dim=256, n_layers=2, n_heads=16, vocab_size=32000)
 
 with fabric.init_module():
     model = Transformer(model_args)
+model.init_weights()
 
 # Parallelize the first embedding and the last linear out projection
 plan = {
@@ -113,9 +117,15 @@ batch_size = 8
 
 # Simplified training loop
 for i in range(num_iterations):
-    tokens = torch.randint(model_args.vocab_size, size=(batch_size, model_args.dim), device=fabric.device)
-    output = model(tokens)
-    loss = output.sum()
+    tokens = torch.randint(model_args.vocab_size, size=(batch_size, 129), device=fabric.device)
+    inputs = tokens[:, :-1]
+    labels = tokens[:, 1:]
+    
+    output = model(inputs)
+    
+    with loss_parallel():
+        loss = F.cross_entropy(output.reshape(-1, output.size(-1)), labels.reshape(-1))
+    
     fabric.backward(loss)
     optimizer.step()
     fabric.print(f"Iteration {i} complete")
