@@ -15,7 +15,7 @@ class RandomTokenDataset(Dataset):
         self.seq_length = seq_length
         self.tokens = torch.randint(
             self.vocab_size, 
-            size=(len(self), self.seq_length),
+            size=(len(self), self.seq_length + 1),
             generator=torch.Generator().manual_seed(42),
         )
 
@@ -41,10 +41,12 @@ fabric = L.Fabric(
 )
 fabric.launch()
 
-# Initialize the model. TODO: Meta-device support
-model_args = ModelArgs(dim=256, n_layers=2, n_heads=16, vocab_size=32000)
-with fabric.init_module():
+# Initialize the model.
+model_args = ModelArgs(vocab_size=32000)  # (dim=256, n_layers=2, n_heads=16, vocab_size=32000)
+with fabric.init_module(empty_init=True):
     model = Transformer(model_args)
+    
+fabric.print(f"Number of parameters: {sum(p.numel() for p in model.parameters()) / 1e9:.1f} B")
 
 # Define the optimizer
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-3, foreach=True)
@@ -52,10 +54,12 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=3e-3, foreach=True)
 # Set up model and optimizer
 model, optimizer = fabric.setup(model, optimizer)
 
+# Materialize meta-device and init weights. TODO: Rewrite model with reset_parameters()
+model.to_empty(device=fabric.device)
 model.init_weights()
 
 # Define dataset/dataloader
-dataset = RandomTokenDataset(vocab_size=model_args.vocab_size, seq_length=129)
+dataset = RandomTokenDataset(vocab_size=model_args.vocab_size, seq_length=2048)
 dataloader = DataLoader(dataset, batch_size=8)
 
 # Fabric configures the sampler automatically for you such that
@@ -85,7 +89,7 @@ for i, batch in enumerate(dataloader):
 # fabric.save("checkpoint.pt", {"model": model})
 
 fabric.print("Training successfully completed!")
-fabric.print(f"Peak memory usage: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
+fabric.print(f"Peak memory usage: {torch.cuda.max_memory_reserved() / 1e9:.02f} GB")
 
 # Avoid warning in PyTorch 2.4
 torch.distributed.destroy_process_group()
