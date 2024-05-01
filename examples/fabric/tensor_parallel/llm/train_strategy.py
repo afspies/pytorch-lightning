@@ -73,6 +73,7 @@ for i, batch in enumerate(dataloader):
 
     fabric.backward(loss)
     optimizer.step()
+    optimizer.zero_grad()
     fabric.print(f"Iteration {i} complete")
     
 
