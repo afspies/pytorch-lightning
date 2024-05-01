@@ -56,10 +56,7 @@ plan = {
     "tok_embeddings": RowwiseParallel(
         input_layouts=Replicate(),
     ),
-    "output": ColwiseParallel(
-        input_layouts=Shard(1),
-        output_layouts=Replicate()
-    ),
+    "output": ColwiseParallel(input_layouts=Shard(1), output_layouts=Replicate()),
     "norm": SequenceParallel(),
     "layers.0": PrepareModuleInput(
         input_layouts=(Replicate(), None),
@@ -120,12 +117,12 @@ for i in range(num_iterations):
     tokens = torch.randint(model_args.vocab_size, size=(batch_size, 129), device=fabric.device)
     inputs = tokens[:, :-1]
     labels = tokens[:, 1:]
-    
+
     output = model(inputs)
-    
+
     with loss_parallel():
         loss = F.cross_entropy(output.reshape(-1, output.size(-1)), labels.reshape(-1))
-    
+
     fabric.backward(loss)
     optimizer.step()
     fabric.print(f"Iteration {i} complete")
