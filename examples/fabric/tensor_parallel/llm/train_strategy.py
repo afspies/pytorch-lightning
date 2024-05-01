@@ -15,11 +15,11 @@ class RandomTokenDataset(Dataset):
         self.vocab_size = vocab_size
         self.seq_length = seq_length
 
-    def __len__(self):
-        return 64
+    def __len__(self) -> int:
+        return 128
 
-    def __getitem__(self, item):
-        return torch.randint(self.vocab_size, size=(self.seq_length, ))
+    def __getitem__(self, item: int):
+        return torch.randint(self.vocab_size, size=(self.seq_length,))
 
 
 fabric = L.Fabric(
@@ -34,16 +34,16 @@ fabric = L.Fabric(
 )
 fabric.launch()
 
+# Access the device mesh if needed
 device_mesh = fabric.strategy.device_mesh
-# dp_mesh = device_mesh["data_parallel"]
-# tp_mesh = device_mesh["tensor_parallel"]
 
+# Initialize the model. TODO: Meta-device support
 model_args = ModelArgs(dim=256, n_layers=2, n_heads=16, vocab_size=32000)
-
 with fabric.init_module():
     model = Transformer(model_args)
 
-model = parallelize(model, fabric.strategy.device_mesh)
+# Applies parallelization specific to the model (TP, FSDP2, activation checkpointing, ...)
+model = parallelize(model, device_mesh)
 model.init_weights()
 
 # Define the optimizer
@@ -52,20 +52,17 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=3e-3, foreach=True)
 # Set up model and optimizer
 model, optimizer = fabric.setup(model, optimizer)
 
-# All inputs in a tensor-parallel group need to be the same
-# Since we don't have a dataloader here, we can simulate this by
-# setting the seed
-# L.seed_everything(dp_mesh.get_local_rank())
-
 dataset = RandomTokenDataset(vocab_size=model_args.vocab_size, seq_length=129)
 dataloader = DataLoader(dataset, batch_size=8)
+
+# Fabric configures the sampler automatically for you such that
+# all batches in a tensor-parallel group are identical
 dataloader = fabric.setup_dataloaders(dataloader)
 
+# Simplified training loop
 fabric.print("Starting training ...")
 
-# Simplified training loop
 for i, batch in enumerate(dataloader):
-    # tokens = torch.randint(model_args.vocab_size, size=(batch_size, 129), device=fabric.device)
     inputs = batch[:, :-1]
     labels = batch[:, 1:]
 
