@@ -40,6 +40,7 @@ from torch.nn import Module
 from torch.optim import Optimizer
 from typing_extensions import TypeGuard, override
 
+from fabric.strategies.fsdp import _distributed_checkpoint_save, _distributed_checkpoint_load
 from lightning.fabric.accelerators import Accelerator
 from lightning.fabric.plugins import CheckpointIO, ClusterEnvironment, Precision
 from lightning.fabric.plugins.collectives.torch_collective import default_pg_timeout
@@ -84,7 +85,19 @@ _FSDP_ALIASES = ("fsdp", "fsdp_cpu_offload")
 
 
 class ModelParallelStrategy(ParallelStrategy):
-    """TODO"""
+    """Enables user-defined parallelism applied to a model.
+
+    Currently supports up to 2D parallelism, for example Fully Sharded Data-Parallel combined with
+    Tensor Parallelism.
+
+    Arguments:
+        parallelize_fn: A function that applies parallelisms to a module. The strategy will provide the
+            model and device mesh as input.
+        data_parallel_size: The number of devices within a data-parallel group. Defaults to ``"auto"``, which
+            sets this size to the number of nodes in the cluster.
+        tensor_parallel_size: The number of devices within a tensor-parallel group. Defaults to ``"auto"``, which
+            sets this size to the number of GPUs in a single node.
+    """
 
     def __init__(
         self,
@@ -237,7 +250,27 @@ class ModelParallelStrategy(ParallelStrategy):
         storage_options: Optional[Any] = None,
         filter: Optional[Dict[str, Callable[[str, Any], bool]]] = None,
     ) -> None:
-        raise NotImplementedError()
+
+        """Save model, optimizer, and other state to a checkpoint on disk.
+
+        If the state-dict-type is ``'full'``, the checkpoint will be written to a single file containing the weights,
+        optimizer state and other metadata. If the state-dict-type is ``'sharded'``, the checkpoint gets saved as a
+        directory containing one file per process, with model- and optimizer shards stored per file. Additionally, it
+        creates a metadata file `meta.pt` with the rest of the user's state (only saved from rank 0).
+
+        """
+        if storage_options is not None:
+            raise TypeError(
+                "`ModelParallel.save_checkpoint(..., storage_options=...)` is not supported because"
+                " `ModelParallel` does not use the `CheckpointIO`."
+            )
+        # TODO:
+        # if filter is not None and self._state_dict_type == "sharded":
+        #     # https://github.com/pytorch/pytorch/issues/105379
+        #     raise NotImplementedError(
+        #         "ModelParallel doesn't support loading sharded filtered checkpoints, so saving them is disabled."
+        #     )
+        _distributed_checkpoint_save(state, path)
 
     @override
     def load_checkpoint(
@@ -246,19 +279,8 @@ class ModelParallelStrategy(ParallelStrategy):
         state: Optional[Union[Module, Optimizer, Dict[str, Union[Module, Optimizer, Any]]]] = None,
         strict: bool = True,
     ) -> Dict[str, Any]:
-        raise NotImplementedError()
-
-    @classmethod
-    @override
-    def register_strategies(cls, strategy_registry: _StrategyRegistry) -> None:
-        if not torch.distributed.is_available():
-            return
-
-        strategy_registry.register(
-            "parallel",
-            cls,
-            description="Manual model parallelism strategy (data-parallel, tensor-parallel, fully-sharded etc.)",
-        )
+        # TODO:
+        _distributed_checkpoint_load(state, path)
 
     def _setup_distributed(self) -> None:
         reset_seed()
