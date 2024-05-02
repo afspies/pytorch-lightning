@@ -41,13 +41,10 @@ from torch.optim import Optimizer
 from typing_extensions import TypeGuard, override
 
 from lightning.fabric.strategies.fsdp import _distributed_checkpoint_save, _distributed_checkpoint_load
-from lightning.fabric.accelerators import Accelerator
 from lightning.fabric.plugins import CheckpointIO, ClusterEnvironment, Precision
 from lightning.fabric.plugins.collectives.torch_collective import default_pg_timeout
-from lightning.fabric.plugins.precision.fsdp import FSDPPrecision
 from lightning.fabric.strategies.launchers.subprocess_script import _SubprocessScriptLauncher
 from lightning.fabric.strategies.parallel import ParallelStrategy
-from lightning.fabric.strategies.registry import _StrategyRegistry
 from lightning.fabric.strategies.strategy import (
     TBroadcast,
     _apply_filter,
@@ -63,11 +60,7 @@ from lightning.fabric.utilities.distributed import (
     _sync_ddp_if_available,
 )
 from lightning.fabric.utilities.distributed import group as _group
-from lightning.fabric.utilities.imports import (
-    _TORCH_GREATER_EQUAL_2_1,
-    _TORCH_GREATER_EQUAL_2_2,
-    _TORCH_GREATER_EQUAL_2_3,
-)
+from lightning.fabric.utilities.imports import _TORCH_GREATER_EQUAL_2_3
 from lightning.fabric.utilities.init import _EmptyInit
 from lightning.fabric.utilities.load import _METADATA_FILENAME, _lazy_load, _materialize_tensors, _move_state_into
 from lightning.fabric.utilities.rank_zero import rank_zero_deprecation, rank_zero_only, rank_zero_warn
@@ -75,20 +68,16 @@ from lightning.fabric.utilities.seed import reset_seed
 from lightning.fabric.utilities.types import _PATH, _Stateful
 
 if TYPE_CHECKING:
-    from torch.distributed.fsdp.fully_sharded_data_parallel import CPUOffload, MixedPrecision, ShardingStrategy
-    from torch.distributed.fsdp.wrap import ModuleWrapPolicy
-
-    _POLICY = Union[Set[Type[Module]], Callable[[Module, bool, int], bool], ModuleWrapPolicy]
-    _SHARDING_STRATEGY = Union[ShardingStrategy, Literal["FULL_SHARD", "SHARD_GRAD_OP", "NO_SHARD", "HYBRID_SHARD"]]
-
-_FSDP_ALIASES = ("fsdp", "fsdp_cpu_offload")
+    from torch.distributed._composable.fsdp import FSDP
 
 
 class ModelParallelStrategy(ParallelStrategy):
     """Enables user-defined parallelism applied to a model.
 
+    .. warning::  This is an :ref:`experimental <versioning:Experimental API>` feature.
+
     Currently supports up to 2D parallelism, for example Fully Sharded Data-Parallel combined with
-    Tensor Parallelism.
+    Tensor Parallelism. Requires PyTorch 2.3 or newer.
 
     Arguments:
         parallelize_fn: A function that applies parallelisms to a module. The strategy will provide the
@@ -108,13 +97,15 @@ class ModelParallelStrategy(ParallelStrategy):
         timeout: Optional[timedelta] = default_pg_timeout,
     ) -> None:
         super().__init__()
+        if not _TORCH_GREATER_EQUAL_2_3:
+            raise ImportError(f"{self.__class__.__name__} requires PyTorch 2.3 or higher.")
         self._parallelize_fn = parallelize_fn
         self._data_parallel_size = data_parallel_size
         self._tensor_parallel_size = tensor_parallel_size
         self._num_nodes = 1
         self._process_group_backend: Optional[str] = process_group_backend
         self._timeout: Optional[timedelta] = timeout
-        # self._backward_sync_control = _FSDPBackwardSyncControl()
+        self._backward_sync_control = _ParallelBackwardSyncControl()
 
         self._device_mesh: Optional[DeviceMesh] = None
 
@@ -310,3 +301,29 @@ class ModelParallelStrategy(ParallelStrategy):
         # `LightningEnvironment.set_global_rank` will do this too, but we cannot rely on that implementation detail
         # additionally, for some implementations, the setter is a no-op, so it's safer to access the getter
         rank_zero_only.rank = utils_rank_zero_only.rank = self.global_rank
+
+
+class _ParallelBackwardSyncControl(_BackwardSyncControl):
+    @override
+    def no_backward_sync(self, module: Module, enabled: bool) -> ContextManager:
+        """Blocks gradient synchronization inside the FSDP2 modules."""
+        return _FSDPNoSync(module=module, enabled=enabled)
+
+
+class _FSDPNoSync(ContextManager):
+    def __init__(self, module: Module, enabled: bool) -> None:
+        self._module = module
+        self._enabled = enabled
+
+    def _set_requires_grad_sync(self, requires_grad_sync: bool) -> None:
+        from torch.distributed._composable.fsdp import FSDP
+
+        for mod in self._module.modules():
+            if isinstance(mod, FSDP):
+                mod.set_requires_gradient_sync(requires_grad_sync, recurse=False)
+
+    def __enter__(self) -> None:
+        self._set_requires_grad_sync(not self._enabled)
+
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
+        self._set_requires_grad_sync(self._enabled)
