@@ -40,7 +40,7 @@ from torch.nn import Module
 from torch.optim import Optimizer
 from typing_extensions import TypeGuard, override
 
-from fabric.strategies.fsdp import _distributed_checkpoint_save, _distributed_checkpoint_load
+from lightning.fabric.strategies.fsdp import _distributed_checkpoint_save, _distributed_checkpoint_load
 from lightning.fabric.accelerators import Accelerator
 from lightning.fabric.plugins import CheckpointIO, ClusterEnvironment, Precision
 from lightning.fabric.plugins.collectives.torch_collective import default_pg_timeout
