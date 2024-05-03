@@ -425,39 +425,7 @@ def test_setup_device_mesh():
 #     assert fabric_model.device == torch.device("cuda", fabric.local_rank)
 #     assert fabric.device == torch.device("cuda", fabric.local_rank)
 #
-#
-# @RunIf(min_cuda_gpus=2, skip_windows=True, standalone=True)
-# def test_setup_with_orig_params_and_multiple_param_groups():
-#     """Test that Fabric sets `use_orig_params` for the user when jointly setting up model and optimizer."""
-#     strategy = FSDPStrategy(auto_wrap_policy=always_wrap_policy)
-#     fabric = Fabric(accelerator="cuda", devices=2, strategy=strategy)
-#     fabric.launch()
-#
-#     model = torch.nn.Sequential(
-#         torch.nn.Linear(10, 10, bias=False),
-#         torch.nn.Linear(5, 2, bias=False),
-#     )
-#     optimizer = torch.optim.Adam([
-#         {"params": model[0].parameters(), "lr": 1e-2},
-#         {"params": model[1].parameters(), "lr": 1e-6},
-#     ])
-#
-#     # set up model and optimizer jointly
-#     wrapped_model, wrapped_optimizer = fabric.setup(model, optimizer)
-#
-#     assert fabric.strategy._fsdp_kwargs["use_orig_params"]
-#     assert isinstance(wrapped_optimizer, _FabricOptimizer)
-#     assert len(wrapped_optimizer.param_groups) == 2
-#     for i in range(2):
-#         layer = wrapped_model._forward_module.module[i]
-#         assert isinstance(layer, FullyShardedDataParallel)
-#         assert torch.equal(wrapped_optimizer.param_groups[i]["params"][0], layer.weight)
-#
-#         # A regular parameter as a view into the flattened parameters
-#         assert isinstance(layer.weight, torch.nn.Parameter)
-#         assert not isinstance(layer.weight, FlatParameter)
-#
-#
+
 # @RunIf(min_cuda_gpus=2, standalone=True, min_torch="2.1.0", dynamo=True, skip_windows=True)
 # @mock.patch("lightning.fabric.wrappers.torch.compile", Mock(wraps=torch.compile))
 # @mock.patch.dict(os.environ, {})
