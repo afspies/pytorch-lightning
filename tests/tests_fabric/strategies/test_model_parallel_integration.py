@@ -42,7 +42,7 @@ from tests_fabric.helpers.runif import RunIf
 from tests_fabric.test_fabric import BoringModel
 
 
-@RunIf(min_torch="2.3", standalone=True) # , min_cuda_gpus=4)
+@RunIf(min_torch="2.3", standalone=True, min_cuda_gpus=4)
 def test_setup_device_mesh():
     for dp_size, tp_size in ((1, 4), (4, 1), (2, 2)):
         strategy = ModelParallelStrategy(

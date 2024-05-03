@@ -36,13 +36,13 @@ fabric = L.Fabric(
         # Define the size of the 2D parallelism
         # Set to "auto" to apply TP intra-node and DP inter-node
         data_parallel_size=2,
-        tensor_parallel_size=4,
+        tensor_parallel_size=2,
     ),
 )
 fabric.launch()
 
 # Initialize the model.
-model_args = ModelArgs(vocab_size=32000)  # (dim=256, n_layers=2, n_heads=16, vocab_size=32000)
+model_args = ModelArgs(dim=256, n_layers=2, n_heads=16, vocab_size=32000)
 with fabric.init_module(empty_init=True):
     model = Transformer(model_args)
     
@@ -82,11 +82,13 @@ for i, batch in enumerate(dataloader):
     optimizer.step()
     optimizer.zero_grad()
     fabric.print(f"Iteration {i} complete")
-    
 
-# TODO
+
 # Save a (distributed) checkpoint
-# fabric.save("checkpoint.pt", {"model": model})
+# See `fabric consolidate --help` if you need to convert the checkpoint to a single file
+state = {"model": model, "optimizer": optimizer, "iteration": i}
+fabric.save("checkpoint.pt", state)
+
 
 fabric.print("Training successfully completed!")
 fabric.print(f"Peak memory usage: {torch.cuda.max_memory_reserved() / 1e9:.02f} GB")
