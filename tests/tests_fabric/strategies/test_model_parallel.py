@@ -154,7 +154,8 @@ def test_meta_device_materialization():
     class CustomModel(nn.Module):
         def __init__(self):
             super().__init__()
-            self.layer1 = NoResetParameters()
+            # nn.Sequential as a parameterless module
+            self.layer1 = nn.Sequential(NoResetParameters(), NoResetParameters())
             self.layer2 = nn.Linear(4, 4)
             self.register_buffer("buffer", torch.rand(2))
 
@@ -167,7 +168,7 @@ def test_meta_device_materialization():
 
     with torch.device("meta"):
         model = CustomModel()
-    assert model.layer1.weight.is_meta
+    assert model.layer1[0].weight.is_meta
     assert model.layer2.weight.is_meta
     assert model.buffer.is_meta
 
