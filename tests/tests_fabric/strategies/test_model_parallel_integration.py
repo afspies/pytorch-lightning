@@ -21,8 +21,9 @@ from unittest.mock import Mock
 import pytest
 import torch
 import torch.nn as nn
+from torch.distributed._tensor import DTensor
 from torch.distributed.device_mesh import DeviceMesh
-
+import torch.nn.functional as F
 from lightning.fabric import Fabric
 from lightning.fabric.plugins import FSDPPrecision
 from lightning.fabric.strategies import ModelParallelStrategy
@@ -34,7 +35,7 @@ from torch._dynamo import OptimizedModule
 from torch.distributed.fsdp import FlatParameter, FullyShardedDataParallel, OptimStateKeyType
 from torch.distributed.fsdp.wrap import always_wrap_policy, wrap
 from torch.nn import Parameter
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, DistributedSampler
 
 from tests_fabric.helpers.datasets import RandomDataset
 from tests_fabric.helpers.runif import RunIf
@@ -88,9 +89,67 @@ def test_setup_device_mesh():
     assert fabric.strategy.device_mesh.size(1) == 4
 
 
+class FeedForward(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.w1 = nn.Linear(32, 64)
+        self.w2 = nn.Linear(32, 64)
+        self.w3 = nn.Linear(64, 32)
+
+    def forward(self, x):
+        return self.w3(F.silu(self.w1(x)) * self.w2(x))
 
 
+def _parallelize_feed_forward_tp(model, device_mesh):
+    from torch.distributed.tensor.parallel import ColwiseParallel, RowwiseParallel, parallelize_module
 
+    tp_mesh = device_mesh["tensor_parallel"]
+    tp_plan = {
+        "w1": ColwiseParallel(),
+        "w2": ColwiseParallel(),
+        "w3": RowwiseParallel(),
+    }
+    parallelize_module(model, tp_mesh, tp_plan)
+    return model
+
+
+@RunIf(min_torch="2.3", standalone=True)  # , min_cuda_gpus=4)
+def test_tensor_parallel():
+    strategy = ModelParallelStrategy(parallelize_fn=_parallelize_feed_forward_tp)
+    fabric = Fabric(accelerator="auto", devices=4, strategy=strategy)
+    fabric.launch()
+
+    with fabric.init_module(empty_init=True):
+        model = FeedForward()
+
+    optimizer = torch.optim.AdamW(model.parameters())
+    model, optimizer = fabric.setup(model, optimizer)
+
+    assert isinstance(model.w1.weight, DTensor)
+    assert isinstance(model.w2.weight, DTensor)
+    assert isinstance(model.w3.weight, DTensor)
+    assert model.w1.weight.device_mesh == fabric.strategy.device_mesh["tensor_parallel"]
+
+    # TP layers don't init weights automatically
+    assert model.w1.weight.device.type == "meta"
+    model.to_empty(device=fabric.device)
+    for layer in (mod for mod in model.modules() if hasattr(mod, "reset_parameters")):
+        layer.reset_parameters()
+
+    dataset_size = 6
+    dataset = RandomDataset(32, dataset_size)
+    dataloader = DataLoader(dataset, batch_size=2)
+    dataloader = fabric.setup_dataloaders(dataloader)
+
+    # No data sharding, all GPUs get the same input inside a TP group
+    assert len(dataloader) == dataset_size // dataloader.batch_size
+    assert isinstance(dataloader.sampler, DistributedSampler)
+
+    for i, batch in enumerate(dataloader):
+        output = model(batch)
+        fabric.backward(output.sum())
+        optimizer.step()
+        optimizer.zero_grad()
 
 
 #
