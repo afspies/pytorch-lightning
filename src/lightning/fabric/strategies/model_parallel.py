@@ -13,6 +13,7 @@
 # limitations under the License.
 from contextlib import ExitStack
 from datetime import timedelta
+from pathlib import Path
 from typing import (
     Any,
     Callable,
@@ -20,7 +21,7 @@ from typing import (
     Dict,
     Literal,
     Optional,
-    Union
+    Union, TypeVar
 )
 
 import torch
@@ -57,6 +58,8 @@ from lightning.fabric.utilities.rank_zero import rank_zero_only
 from lightning.fabric.utilities.seed import reset_seed
 from lightning.fabric.utilities.types import _PATH
 
+TModel = TypeVar("TModel", bound=Module)
+
 
 class ModelParallelStrategy(ParallelStrategy):
     """Enables user-defined parallelism applied to a model.
@@ -77,7 +80,7 @@ class ModelParallelStrategy(ParallelStrategy):
 
     def __init__(
         self,
-        parallelize_fn: Callable[[Module, DeviceMesh], Module],
+        parallelize_fn: Callable[[TModel, DeviceMesh], TModel],
         data_parallel_size: Union[Literal["auto"], int] = "auto",
         tensor_parallel_size:  Union[Literal["auto"], int] = "auto",
         process_group_backend: Optional[str] = None,
@@ -223,6 +226,9 @@ class ModelParallelStrategy(ParallelStrategy):
             )
         if filter is not None:
             raise NotImplementedError(f"{self.__class__.__name__} does not yet support the `filter` argument.")
+
+        # broadcast the path from rank 0 to ensure all the states are saved in a common path
+        path = Path(self.broadcast(path))
         _distributed_checkpoint_save(state, path)
 
     @override
@@ -239,6 +245,8 @@ class ModelParallelStrategy(ParallelStrategy):
         if strict is False:
             raise NotImplementedError(f"Non-strict loading is not yet supported in {self.__class__.__name__}.")
 
+        # broadcast the path from rank 0 to ensure all the states are loaded from a common path
+        path = Path(self.broadcast(path))
         _distributed_checkpoint_load(state, path)
         return {}
 
