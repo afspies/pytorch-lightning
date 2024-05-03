@@ -247,7 +247,7 @@ class ModelParallelStrategy(ParallelStrategy):
 
         # broadcast the path from rank 0 to ensure all the states are loaded from a common path
         path = Path(self.broadcast(path))
-        _distributed_checkpoint_load(state, path)
+        _distributed_checkpoint_load(state, path)  # type: ignore[arg-type]
         return {}
 
     def _setup_distributed(self) -> None:
