@@ -223,17 +223,6 @@ class ModelParallelStrategy(ParallelStrategy):
         return obj[0]
 
     @override
-    def clip_gradients_norm(
-        self,
-        module: Module,
-        optimizer: Optimizer,
-        max_norm: Union[float, int],
-        norm_type: Union[float, int] = 2.0,
-        error_if_nonfinite: bool = True,
-    ) -> Tensor:
-        raise NotImplementedError()
-
-    @override
     def save_checkpoint(
         self,
         path: _PATH,
@@ -241,7 +230,6 @@ class ModelParallelStrategy(ParallelStrategy):
         storage_options: Optional[Any] = None,
         filter: Optional[Dict[str, Callable[[str, Any], bool]]] = None,
     ) -> None:
-
         """Save model, optimizer, and other state to a checkpoint on disk.
 
         If the state-dict-type is ``'full'``, the checkpoint will be written to a single file containing the weights,
@@ -252,8 +240,8 @@ class ModelParallelStrategy(ParallelStrategy):
         """
         if storage_options is not None:
             raise TypeError(
-                "`ModelParallel.save_checkpoint(..., storage_options=...)` is not supported because"
-                " `ModelParallel` does not use the `CheckpointIO`."
+                f"`{self.__class__.__name__}.save_checkpoint(..., storage_options=...)` is not supported because"
+                f" `{self.__class__.__name__}` does not use the `CheckpointIO`."
             )
         # TODO:
         # if filter is not None and self._state_dict_type == "sharded":
