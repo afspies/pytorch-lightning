@@ -71,6 +71,30 @@ def test_load_non_strict_unsupported(tmp_path):
 
 
 @RunIf(min_torch="2.3")
+def test_parallelize_fn_call():
+    model = nn.Linear(2, 2)
+    optimizer = Adam(model.parameters())
+
+    parallel_model_mock = Mock(spec=nn.Module, modules=Mock(return_value=[]))
+    parallelize_fn = Mock(return_value=parallel_model_mock)
+    strategy = ModelParallelStrategy(parallelize_fn=parallelize_fn)
+    strategy._device_mesh = Mock()
+    strategy.parallel_devices = [torch.device("cpu")]
+    model_setup, [optimizer_setup] = strategy.setup_module_and_optimizers(model, [optimizer])
+    assert model_setup is parallel_model_mock
+    assert optimizer_setup is optimizer
+    parallelize_fn.assert_called_with(model, strategy.device_mesh)
+
+    # Raises an error if parallelize_fn does not return a module
+    parallelize_fn = Mock(return_value=None)
+    strategy = ModelParallelStrategy(parallelize_fn=parallelize_fn)
+    strategy._device_mesh = Mock()
+    strategy.parallel_devices = [torch.device("cpu")]
+    with pytest.raises(TypeError, match="The `parallelize_fn` must return a `nn.Module` instance"):
+        strategy.setup_module_and_optimizers(model, [optimizer])
+
+
+@RunIf(min_torch="2.3")
 def test_no_backward_sync():
     """Test that the backward sync control calls `.no_sync()`, and only on a module wrapped in
     FullyShardedDataParallel."""

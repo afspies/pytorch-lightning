@@ -173,6 +173,10 @@ class ModelParallelStrategy(ParallelStrategy):
     @override
     def setup_module(self, module: Module) -> Module:
         module = self._parallelize_fn(module, self.device_mesh)
+        if not isinstance(module, Module):
+            raise TypeError(
+                f"The `parallelize_fn` must return a `nn.Module` instance, but got: {type(module).__name__}"
+            )
         _move_torchmetrics_to_device(module, self.root_device)
         return module
 
