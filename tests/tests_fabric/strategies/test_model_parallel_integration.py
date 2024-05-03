@@ -531,7 +531,7 @@ def test_fsdp2_tensor_parallel():
 #     assert torch.equal(params_before, params_after)
 #
 
-@RunIf(min_cuda_gpus=2, skip_windows=True, standalone=True)
+@RunIf(min_torch="2.3", min_cuda_gpus=2, skip_windows=True, standalone=True)
 @pytest.mark.parametrize("move_to_device", [True, False])
 @mock.patch("lightning.fabric.wrappers._FabricModule")
 def test_setup_module_move_to_device(fabric_module_mock, move_to_device):
@@ -541,15 +541,13 @@ def test_setup_module_move_to_device(fabric_module_mock, move_to_device):
     fabric = Fabric(accelerator="cuda", devices=2, strategy=strategy)
     fabric.launch()
 
-    model = torch.nn.Linear(10, 10, bias=False)  # total params: 10 * 10 = 100
+    model = FeedForward()
     fabric_model = fabric.setup_module(model, move_to_device=move_to_device)
     fabric_module_mock.assert_not_called()
 
-    assert len(list(fabric_model.parameters())) == 1
     # the linear layer got sharded and each part is on the expected device
-    assert next(fabric_model.parameters()).device == torch.device("cuda", fabric.local_rank)
-    assert next(fabric_model.parameters()).numel() == 50
-    assert isinstance(next(fabric_model.parameters()), Parameter)
+    assert fabric_model.w1.weight.device == torch.device("cuda", fabric.local_rank)
+    assert isinstance(fabric_model.w1.weight, DTensor)
 
     # The _DeviceDtypeModuleMixin currently can't represent the device in a meaningful way for models with pieces on
     # different devices
@@ -557,7 +555,7 @@ def test_setup_module_move_to_device(fabric_module_mock, move_to_device):
     assert fabric.device == torch.device("cuda", fabric.local_rank)
 
 
-@RunIf(min_cuda_gpus=2, skip_windows=True, standalone=True)
+@RunIf(min_torch="2.3", min_cuda_gpus=2, skip_windows=True, standalone=True)
 @pytest.mark.parametrize(
     ("precision", "expected_dtype"),
     [
