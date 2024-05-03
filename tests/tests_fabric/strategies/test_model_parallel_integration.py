@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import os
+from contextlib import nullcontext
 from copy import deepcopy
 from pathlib import Path
 from unittest import mock
@@ -40,29 +41,51 @@ from tests_fabric.helpers.runif import RunIf
 from tests_fabric.test_fabric import BoringModel
 
 
-@RunIf(min_torch="2.3")
-@pytest.mark.parametrize("dp_size,tp_size", [
-    (1, 4),
-    # (4, 1),
-    # (2, 2),
-    # (2, 3),  # error
-])
-def test_setup_device_mesh(dp_size, tp_size):
+@RunIf(min_torch="2.3", standalone=True) # , min_cuda_gpus=4)
+def test_setup_device_mesh():
+    for dp_size, tp_size in ((1, 4), (4, 1), (2, 2)):
+        strategy = ModelParallelStrategy(
+            parallelize_fn=(lambda m, _: m),
+            data_parallel_size=dp_size,
+            tensor_parallel_size=tp_size,
+        )
+        fabric = Fabric(accelerator="auto", devices=4, strategy=strategy)
+        fabric.launch()
+
+        device_mesh = fabric.strategy.device_mesh
+        assert isinstance(device_mesh, DeviceMesh)
+        assert device_mesh.device_type == fabric.device.type
+        assert device_mesh.mesh_dim_names == ("data_parallel", "tensor_parallel")
+        assert device_mesh.size(0) == dp_size
+        assert device_mesh.size(1) == tp_size
+        assert device_mesh.ndim == 2
+
+        fabric.barrier()
+
+    # Passing sizes that don't multiply to the world size raises an error
+    for invalid_dp_size, invalid_tp_size in ((1, 1), (2, 3), (4, 2)):
+        strategy = ModelParallelStrategy(
+            parallelize_fn=(lambda m, _: m),
+            data_parallel_size=invalid_dp_size,
+            tensor_parallel_size=invalid_tp_size,
+        )
+        fabric = Fabric(accelerator="auto", devices=4, strategy=strategy)
+        with pytest.raises(RuntimeError, match="multiplied should equal the world size"):
+            fabric.launch()
+
+        fabric.barrier()
+
+    # Passing "auto" will select internode and intranode dimensions automatically
     strategy = ModelParallelStrategy(
         parallelize_fn=(lambda m, _: m),
-        data_parallel_size=dp_size,
-        tensor_parallel_size=tp_size,
+        data_parallel_size="auto",
+        tensor_parallel_size="auto",
     )
-    fabric = Fabric(accelerator="cpu", devices=4, strategy=strategy)
-
-    with pytest.raises(RuntimeError, match="Accessing the device mesh .* not allowed"):
-        _ = fabric.strategy.device_mesh
-
+    fabric = Fabric(accelerator="auto", devices=4, num_nodes=1, strategy=strategy)
     fabric.launch()
-    device_mesh = fabric.strategy.device_mesh
-    assert isinstance(device_mesh, DeviceMesh)
-    assert device_mesh.device_type == fabric.device.type
-    assert device_mesh.mesh_dim_names == ["data_parallel", "tensor_parallel"]
+    assert fabric.strategy.device_mesh.mesh_dim_names == ("data_parallel", "tensor_parallel")
+    assert fabric.strategy.device_mesh.size(0) == 1
+    assert fabric.strategy.device_mesh.size(1) == 4
 
 
 
