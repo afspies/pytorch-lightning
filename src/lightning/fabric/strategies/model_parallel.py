@@ -262,11 +262,17 @@ class ModelParallelStrategy(ParallelStrategy):
         assert self.cluster_environment is not None
         _init_dist_connection(self.cluster_environment, self._process_group_backend, timeout=self._timeout)
 
-    def _setup_device_mesh(self):
-        self._data_parallel_size = self.num_nodes if self._data_parallel_size == "auto" else self._data_parallel_size
-        self._tensor_parallel_size = self.num_processes if self._tensor_parallel_size == "auto" else self._tensor_parallel_size
-        # TODO: Error message
-        assert self._data_parallel_size * self._tensor_parallel_size == self.world_size
+    def _setup_device_mesh(self) -> None:
+        if self._data_parallel_size == "auto":
+            self._data_parallel_size = self.num_nodes
+        if self._tensor_parallel_size == "auto":
+            self._tensor_parallel_size = self.num_processes
+        if self._data_parallel_size * self._tensor_parallel_size != self.world_size:
+            raise RuntimeError(
+                f"The sizes `data_parallel_size={self._data_parallel_size}` and"
+                f" `tensor_parallel_size={self._tensor_parallel_size}` multiplied should equal the world size"
+                f" ({self.world_size})."
+            )
         self._device_mesh = init_device_mesh(
             device_type=self.root_device.type,
             mesh_shape=(self._data_parallel_size, self._tensor_parallel_size),
