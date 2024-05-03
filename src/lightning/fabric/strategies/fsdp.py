@@ -870,13 +870,13 @@ def _load_raw_module_state(state_dict: Dict[str, Any], module: Module, world_siz
             module.load_state_dict(state_dict, strict=strict)
 
 
-def _has_meta_device_parameters(obj: Union[Module, Optimizer]) -> bool:
+def _has_meta_device_parameters(obj: Union[Module, Optimizer], recurse: bool = True) -> bool:
     if isinstance(obj, Optimizer):
         return any(
             t.is_meta for param_group in obj.param_groups for t in param_group["params"] if isinstance(t, Parameter)
         )
     if isinstance(obj, Module):
-        return any(t.is_meta for t in obj.parameters())
+        return any(t.is_meta for t in obj.parameters(recurse=recurse))
     raise TypeError(f"Expected `torch.nn.Module` or `torch.optim.Optimizer`, got: {type(obj).__name__}")
 
 

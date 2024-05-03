@@ -113,6 +113,24 @@ def _parallelize_feed_forward_tp(model, device_mesh):
     return model
 
 
+def _parallelize_feed_forward_fsdp2(model, device_mesh):
+    from torch.distributed._composable.fsdp.fully_shard import fully_shard
+    from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import checkpoint_wrapper
+
+    dp_mesh = device_mesh["data_parallel"]
+    assert dp_mesh.ndim == 1  # Hybrid-sharding not supported
+
+    # Fully-shard each layer
+    fully_shard(model.w1, mesh=dp_mesh)
+    fully_shard(model.w2, mesh=dp_mesh)
+    fully_shard(model.w3, mesh=dp_mesh)
+    
+    # Activation checkpointing
+    model = checkpoint_wrapper(model)
+    
+    return model
+
+
 @RunIf(min_torch="2.3", standalone=True, min_cuda_gpus=2)
 def test_tensor_parallel():
     strategy = ModelParallelStrategy(parallelize_fn=_parallelize_feed_forward_tp)
@@ -127,16 +145,8 @@ def test_tensor_parallel():
     optimizer = torch.optim.AdamW(model.parameters())
     model, optimizer = fabric.setup(model, optimizer)
 
-    assert isinstance(model.w1.weight, DTensor)
-    assert isinstance(model.w2.weight, DTensor)
-    assert isinstance(model.w3.weight, DTensor)
+    assert all(isinstance(weight, DTensor) for weight in model.parameters())
     assert model.w1.weight.device_mesh == fabric.strategy.device_mesh["tensor_parallel"]
-
-    # TP layers don't init weights automatically
-    assert model.w1.weight.device.type == "meta"
-    model.to_empty(device=fabric.device)
-    for layer in (mod for mod in model.modules() if hasattr(mod, "reset_parameters")):
-        layer.reset_parameters()
 
     dataset_size = 6
     dataset = RandomDataset(32, dataset_size)
@@ -147,7 +157,7 @@ def test_tensor_parallel():
     assert len(dataloader) == dataset_size // dataloader.batch_size
     assert isinstance(dataloader.sampler, DistributedSampler)
 
-    for i, batch in enumerate(dataloader):
+    for _, batch in enumerate(dataloader):
         
         # All batches must be identical across TP group
         batches = fabric.all_gather(batch)
@@ -158,6 +168,61 @@ def test_tensor_parallel():
         optimizer.step()
         optimizer.zero_grad()
 
+
+def _parallelize_feed_forward_fsdp2_tp(model, device_mesh):
+    model = _parallelize_feed_forward_tp(model, device_mesh)
+    model = _parallelize_feed_forward_fsdp2(model, device_mesh)
+    return model
+
+
+@RunIf(min_torch="2.3", standalone=True, min_cuda_gpus=4)
+def test_fsdp2_tensor_parallel():
+    strategy = ModelParallelStrategy(
+        parallelize_fn=_parallelize_feed_forward_fsdp2_tp,
+        data_parallel_size=2,
+        tensor_parallel_size=2,
+    )
+    fabric = Fabric(accelerator="auto", devices=4, strategy=strategy)
+    fabric.launch()
+    
+    fabric.seed_everything(0)
+
+    with fabric.init_module(empty_init=True):
+        model = FeedForward()
+
+    optimizer = torch.optim.AdamW(model.parameters())
+    model, optimizer = fabric.setup(model, optimizer)
+
+    assert all(isinstance(weight, DTensor) for weight in model.parameters())
+    assert model.w1.weight.device_mesh.ndim == 2
+    assert model.w1.weight.device_mesh.size(0) == 2
+    assert model.w1.weight.device_mesh.size(1) == 2
+    assert all(weight.device.type != "meta" for weight in model.parameters())
+
+    dataset_size = 8
+    dataset = RandomDataset(32, dataset_size)
+    dataloader = DataLoader(dataset, batch_size=2)
+    dataloader = fabric.setup_dataloaders(dataloader)
+
+    # No data sharding across TP dimension, sharding across data-parallel dimension only
+    dp_mesh = fabric.strategy.device_mesh["data_parallel"]
+    tp_mesh = fabric.strategy.device_mesh["tensor_parallel"]
+    assert len(dataloader) == dataset_size // dataloader.batch_size // dp_mesh.size()
+    assert isinstance(dataloader.sampler, DistributedSampler)
+
+    for _, batch in enumerate(dataloader):
+        batches = fabric.all_gather(batch)
+        # Batches across the TP dimension must be identical
+        batches_tp = batches[tp_mesh.mesh]
+        assert all(torch.equal(batches_tp[0], batches_tp[i]) for i in range(1, len(batches_tp)))
+        # Batches across the DP dimension must be different
+        batches_dp = batches[dp_mesh.mesh]
+        assert all(not torch.equal(batches_dp[0], batches_dp[i]) for i in range(1, len(batches_dp)))
+        
+        output = model(batch)
+        fabric.backward(output.sum())
+        optimizer.step()
+        optimizer.zero_grad()
 
 #
 #

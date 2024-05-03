@@ -43,6 +43,7 @@ from typing_extensions import TypeGuard, override
 from lightning.fabric.strategies.fsdp import (
     _distributed_checkpoint_save,
     _distributed_checkpoint_load,
+    _has_meta_device_parameters,
     _move_torchmetrics_to_device,
 )
 from lightning.fabric.plugins import CheckpointIO, ClusterEnvironment, Precision
@@ -177,7 +178,21 @@ class ModelParallelStrategy(ParallelStrategy):
             raise TypeError(
                 f"The `parallelize_fn` must return a `nn.Module` instance, but got: {type(module).__name__}"
             )
-        _move_torchmetrics_to_device(module, self.root_device)
+        # TODO: Introduce `Fabric.materialize(module)` to give user control over materialization
+        modules_not_reset = set()
+        for submodule in module.modules():
+            if _has_meta_device_parameters(submodule, recurse=False):
+                if callable(reset_method := getattr(submodule, "reset_parameters", None)):
+                    submodule.to_empty(device=self.root_device, recurse=False)
+                    reset_method()
+                else:
+                    modules_not_reset.add(submodule)
+        if modules_not_reset:
+            # TODO: Warn
+            pass
+          
+        # TODO:      
+        # _move_torchmetrics_to_device(module, self.root_device)
         return module
 
     @override

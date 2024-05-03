@@ -41,7 +41,7 @@ fabric = L.Fabric(
 )
 fabric.launch()
 
-# Initialize the model.
+# Initialize the model
 model_args = ModelArgs(dim=256, n_layers=2, n_heads=16, vocab_size=32000)
 with fabric.init_module(empty_init=True):
     model = Transformer(model_args)
