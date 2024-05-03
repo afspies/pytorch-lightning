@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import itertools
 from contextlib import ExitStack
 from datetime import timedelta
 from pathlib import Path
@@ -297,7 +298,8 @@ def _materialize_module(module: Module, device: torch.device) -> None:
     
     uninitialized_modules = set()
     for submodule in module.modules():
-        if not len(list(submodule.parameters(recurse=False))) and not len(list(submodule.buffers(recurse=False))):
+        if all(False for _ in itertools.chain(submodule.parameters(recurse=False), submodule.buffers(recurse=False))):
+            # module has no parameters or buffers
             continue
         if callable(reset_method := getattr(submodule, "reset_parameters", None)):
             reset_method()
@@ -306,8 +308,8 @@ def _materialize_module(module: Module, device: torch.device) -> None:
 
     if uninitialized_modules:
         rank_zero_warn(
-            "Parameter initialization incomplete. The following modules have parameters or buffers with uninitialized memory"
-            " because they don't define a `reset_parameters()` method for re-initialization:"
+            "Parameter initialization incomplete. The following modules have parameters or buffers with uninitialized"
+            " memory because they don't define a `reset_parameters()` method for re-initialization:"
             f" {', '.join(uninitialized_modules)}"
         )
 
