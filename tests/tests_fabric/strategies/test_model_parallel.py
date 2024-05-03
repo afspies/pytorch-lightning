@@ -141,3 +141,37 @@ def test_set_timeout(init_process_group_mock, _):
     init_process_group_mock.assert_called_with(
         process_group_backend, rank=global_rank, world_size=world_size, timeout=test_timedelta
     )
+
+
+def test_meta_device_materialization():
+    """Test that the `setup_module()` method materializes meta-device tensors in the module."""
+    class NoResetParameters(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = nn.Parameter(torch.ones(4, 4))
+
+    class CustomModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.layer1 = NoResetParameters()
+            self.layer2 = nn.Linear(4, 4)
+            self.register_buffer("buffer", torch.rand(2))
+
+        def reset_parameters(self):
+            self.buffer.fill_(1.)
+
+    strategy = ModelParallelStrategy(parallelize_fn=(lambda x, _: x))
+    strategy._device_mesh = Mock()
+    strategy._parallel_devices = [torch.device("cpu")]
+
+    with torch.device("meta"):
+        model = CustomModel()
+    assert model.layer1.weight.is_meta
+    assert model.layer2.weight.is_meta
+    assert model.buffer.is_meta
+
+    with pytest.warns(UserWarning, match=r"`reset_parameters\(\)` method for re-initialization: NoResetParameters"):
+        model = strategy.setup_module(model)
+    assert model.layer1.weight.is_meta
+    assert not model.layer2.weight.is_meta
+    assert not model.buffer.is_meta

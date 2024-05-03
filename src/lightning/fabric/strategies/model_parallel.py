@@ -35,7 +35,7 @@ from typing_extensions import override
 from lightning.fabric.strategies.fsdp import (
     _distributed_checkpoint_save,
     _distributed_checkpoint_load,
-    _has_meta_device_parameters,
+    _has_meta_device_parameters_or_buffers,
     _move_torchmetrics_to_device,
 )
 from lightning.fabric.plugins import CheckpointIO
@@ -55,7 +55,7 @@ from lightning.fabric.utilities.distributed import (
 )
 from lightning.fabric.utilities.distributed import group as _group
 from lightning.fabric.utilities.imports import _TORCH_GREATER_EQUAL_2_3
-from lightning.fabric.utilities.rank_zero import rank_zero_only
+from lightning.fabric.utilities.rank_zero import rank_zero_only, rank_zero_warn
 from lightning.fabric.utilities.seed import reset_seed
 from lightning.fabric.utilities.types import _PATH
 
@@ -164,19 +164,8 @@ class ModelParallelStrategy(ParallelStrategy):
             raise TypeError(
                 f"The `parallelize_fn` must return a `nn.Module` instance, but got: {type(module).__name__}"
             )
-        # TODO: Introduce `Fabric.materialize(module)` to give user control over materialization
-        modules_not_reset = set()
-        for submodule in module.modules():
-            if _has_meta_device_parameters(submodule, recurse=False):
-                if callable(reset_method := getattr(submodule, "reset_parameters", None)):
-                    submodule.to_empty(device=self.root_device, recurse=False)
-                    reset_method()
-                else:
-                    modules_not_reset.add(submodule)
-        if modules_not_reset:
-            # TODO: Warn
-            pass
-          
+        _materialize_module(module, self.root_device)
+
         # TODO:      
         # _move_torchmetrics_to_device(module, self.root_device)
         return module
@@ -190,11 +179,8 @@ class ModelParallelStrategy(ParallelStrategy):
         precision_init_ctx = self.precision.module_init_context()
         stack = ExitStack()
         if empty_init:
-            # For FSDP/FSDP2 wrapped modules, materialization happens in `setup`.
-            #   When modules get wrapped, the sequence of operations is:
-            #   1) materialize module 2) call `reset_parameters()` 3) shard the module.
-            #   These operations are applied to each submodule 'bottom up' in the module hierarchy.
-            # For TP modules alone (ColwiseParallel, RowwiseParallel, etc.), there is no automated materialization.
+            # Materializaton happens in `setup_module`
+            # TODO: Introduce `Fabric.materialize(module)` to give user control over materialization
             stack.enter_context(torch.device("meta"))
         stack.enter_context(precision_init_ctx)
         return stack
@@ -299,6 +285,27 @@ class ModelParallelStrategy(ParallelStrategy):
         # `LightningEnvironment.set_global_rank` will do this too, but we cannot rely on that implementation detail
         # additionally, for some implementations, the setter is a no-op, so it's safer to access the getter
         rank_zero_only.rank = utils_rank_zero_only.rank = self.global_rank
+
+
+def _materialize_module(module: Module, device: torch.device) -> None:
+    # Reference: https://github.com/pytorch/torchtitan/blob/main/docs/fsdp.md#meta-device-initialization
+    # TODO: Introduce `Fabric.materialize(module)` to give user control when materialization should happen
+    skipped_modules = set()
+    for submodule in module.modules():
+        if not _has_meta_device_parameters_or_buffers(submodule, recurse=False):
+            continue
+        if callable(reset_method := getattr(submodule, "reset_parameters", None)):
+            submodule.to_empty(device=device, recurse=False)
+            reset_method()
+        else:
+            skipped_modules.add(type(submodule).__name__)
+
+    if skipped_modules:
+        rank_zero_warn(
+            "Parameter initialization incomplete. The following modules still have parameters on the meta device"
+            " because they don't define a `reset_parameters()` method for re-initialization:"
+            f" {', '.join(skipped_modules)}"
+        )
 
 
 class _ParallelBackwardSyncControl(_BackwardSyncControl):
