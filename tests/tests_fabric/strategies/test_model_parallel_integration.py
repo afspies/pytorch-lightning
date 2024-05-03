@@ -113,11 +113,13 @@ def _parallelize_feed_forward_tp(model, device_mesh):
     return model
 
 
-@RunIf(min_torch="2.3", standalone=True)  # , min_cuda_gpus=4)
+@RunIf(min_torch="2.3", standalone=True, min_cuda_gpus=2)
 def test_tensor_parallel():
     strategy = ModelParallelStrategy(parallelize_fn=_parallelize_feed_forward_tp)
-    fabric = Fabric(accelerator="auto", devices=4, strategy=strategy)
+    fabric = Fabric(accelerator="auto", devices=2, strategy=strategy)
     fabric.launch()
+    
+    fabric.seed_everything(0)
 
     with fabric.init_module(empty_init=True):
         model = FeedForward()
@@ -146,6 +148,11 @@ def test_tensor_parallel():
     assert isinstance(dataloader.sampler, DistributedSampler)
 
     for i, batch in enumerate(dataloader):
+        
+        # All batches must be identical across TP group
+        batches = fabric.all_gather(batch)
+        assert all(torch.equal(batches[0], batches[i]) for i in range(1, len(batches)))
+        
         output = model(batch)
         fabric.backward(output.sum())
         optimizer.step()
