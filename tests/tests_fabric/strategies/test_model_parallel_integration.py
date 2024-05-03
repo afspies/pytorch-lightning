@@ -530,107 +530,64 @@ def test_fsdp2_tensor_parallel():
 #         params_after = torch.cat([p.cpu().view(-1) for p in trainer.model.parameters()])
 #     assert torch.equal(params_before, params_after)
 #
-#
-# @RunIf(min_cuda_gpus=2, skip_windows=True, standalone=True)
-# @pytest.mark.parametrize("move_to_device", [True, False])
-# @mock.patch("lightning.fabric.wrappers._FabricModule")
-# def test_setup_module_move_to_device(fabric_module_mock, move_to_device):
-#     """Test that `move_to_device` does nothing, FSDP decides which device parameters get moved to which device
-#     (sharding)."""
-#     strategy = FSDPStrategy(auto_wrap_policy=always_wrap_policy)
-#     fabric = Fabric(accelerator="cuda", devices=2, strategy=strategy)
-#     fabric.launch()
-#
-#     model = torch.nn.Linear(10, 10, bias=False)  # total params: 10 * 10 = 100
-#     fabric_model = fabric.setup_module(model, move_to_device=move_to_device)
-#     fabric_module_mock.assert_not_called()
-#
-#     assert len(list(fabric_model.parameters())) == 1
-#     # the linear layer got sharded and each part is on the expected device
-#     assert next(fabric_model.parameters()).device == torch.device("cuda", fabric.local_rank)
-#     assert next(fabric_model.parameters()).numel() == 50
-#     assert isinstance(next(fabric_model.parameters()), Parameter)
-#
-#     # The _DeviceDtypeModuleMixin currently can't represent the device in a meaningful way for models with pieces on
-#     # different devices
-#     assert fabric_model.device == torch.device("cuda", fabric.local_rank)
-#     assert fabric.device == torch.device("cuda", fabric.local_rank)
-#
 
-# @RunIf(min_cuda_gpus=2, standalone=True, min_torch="2.1.0", dynamo=True, skip_windows=True)
-# @mock.patch("lightning.fabric.wrappers.torch.compile", Mock(wraps=torch.compile))
-# @mock.patch.dict(os.environ, {})
-# def test_reapply_compile():
-#     """Test that Fabric can rewrap a compiled module such that compilation happens over the FSDP-wrapper."""
-#     strategy = FSDPStrategy(auto_wrap_policy=always_wrap_policy)
-#     fabric = Fabric(accelerator="cuda", devices=2, strategy=strategy)
-#     fabric.launch()
-#
-#     model = BoringModel()
-#     compile_kwargs = {"mode": "reduce-overhead"}
-#     compiled_model = torch.compile(model, **compile_kwargs)
-#     torch.compile.reset_mock()
-#
-#     fabric_model = fabric.setup(compiled_model, _reapply_compile=True)
-#
-#     assert isinstance(fabric_model._forward_module, OptimizedModule)
-#     assert isinstance(fabric_model._forward_module._orig_mod, FullyShardedDataParallel)
-#
-#     # Assert we called compile again with the same arguments, but on the FSDP-wrapped module
-#     torch.compile.assert_called_with(fabric_model._forward_module._orig_mod, **compile_kwargs)
-#
-#     assert fabric_model._original_module == model
-#     assert fabric_model._forward_module._orig_mod.module == model
-#     assert fabric_model.device == fabric.device
-#
-#     # Smoke-testing forward to ensure we don't get compilation errors
-#     for _ in range(3):
-#         loss = fabric_model(torch.randn(2, 32, device=fabric.device)).sum()
-#         fabric.backward(loss)
-#
-#
-# @RunIf(min_cuda_gpus=2, skip_windows=True, standalone=True)
-# @pytest.mark.parametrize(
-#     ("precision", "expected_dtype"),
-#     [
-#         ("32-true", torch.float32),
-#         ("16-true", torch.float16),
-#         pytest.param("bf16-true", torch.bfloat16, marks=RunIf(bf16_cuda=True)),
-#     ],
-# )
-# def test_module_init_context(precision, expected_dtype):
-#     """Test that the module under the init-context gets moved to the right device and dtype."""
-#     fabric = Fabric(
-#         accelerator="cuda",
-#         devices=2,
-#         strategy=FSDPStrategy(auto_wrap_policy=always_wrap_policy),
-#         precision=precision,
-#     )
-#     fabric.launch()
-#
-#     def _run_setup_assertions(empty_init, expected_device):
-#         with fabric.init_module(empty_init=empty_init):
-#             model = torch.nn.Linear(100, 100, bias=False)
-#
-#         # The model is on the CPU/meta-device until after `.setup()``
-#         assert model.weight.device == expected_device
-#         assert model.weight.dtype == expected_dtype
-#         model = fabric.setup(model)
-#         # Parameters get sharded in `.setup()` and moved to the target device
-#         assert model.weight.device == torch.device("cuda", fabric.local_rank)
-#         assert model.weight.dtype == expected_dtype
-#
-#     # Case 1: No empty init
-#     _run_setup_assertions(empty_init=False, expected_device=torch.device("cpu"))
-#
-#     if _TORCH_GREATER_EQUAL_2_1:
-#         # Case 2: Empty-init with PyTorch >= 2.1 supports meta device
-#         _run_setup_assertions(empty_init=True, expected_device=torch.device("meta"))
-#     else:
-#         # Case 2: Empty-init with PyTorch < 2.1 only supports `torch.empty()`-init
-#         _run_setup_assertions(empty_init=True, expected_device=torch.device("cpu"))
-#
-#
+@RunIf(min_cuda_gpus=2, skip_windows=True, standalone=True)
+@pytest.mark.parametrize("move_to_device", [True, False])
+@mock.patch("lightning.fabric.wrappers._FabricModule")
+def test_setup_module_move_to_device(fabric_module_mock, move_to_device):
+    """Test that `move_to_device` does nothing, ModelParallel decides which device parameters get moved to which device
+    (sharding)."""
+    strategy = ModelParallelStrategy(parallelize_fn=_parallelize_feed_forward_fsdp2)
+    fabric = Fabric(accelerator="cuda", devices=2, strategy=strategy)
+    fabric.launch()
+
+    model = torch.nn.Linear(10, 10, bias=False)  # total params: 10 * 10 = 100
+    fabric_model = fabric.setup_module(model, move_to_device=move_to_device)
+    fabric_module_mock.assert_not_called()
+
+    assert len(list(fabric_model.parameters())) == 1
+    # the linear layer got sharded and each part is on the expected device
+    assert next(fabric_model.parameters()).device == torch.device("cuda", fabric.local_rank)
+    assert next(fabric_model.parameters()).numel() == 50
+    assert isinstance(next(fabric_model.parameters()), Parameter)
+
+    # The _DeviceDtypeModuleMixin currently can't represent the device in a meaningful way for models with pieces on
+    # different devices
+    assert fabric_model.device == torch.device("cuda", fabric.local_rank)
+    assert fabric.device == torch.device("cuda", fabric.local_rank)
+
+
+@RunIf(min_cuda_gpus=2, skip_windows=True, standalone=True)
+@pytest.mark.parametrize(
+    ("precision", "expected_dtype"),
+    [
+        ("32-true", torch.float32),
+        ("16-true", torch.float16),
+        pytest.param("bf16-true", torch.bfloat16, marks=RunIf(bf16_cuda=True)),
+    ],
+)
+def test_module_init_context(precision, expected_dtype):
+    """Test that the module under the init-context gets moved to the right device and dtype."""
+    strategy = ModelParallelStrategy(parallelize_fn=_parallelize_feed_forward_fsdp2)
+    fabric = Fabric(accelerator="cuda", devices=2, strategy=strategy, precision=precision)
+    fabric.launch()
+
+    def _run_setup_assertions(empty_init, expected_device):
+        with fabric.init_module(empty_init=empty_init):
+            model = FeedForward()
+
+        # The model is on the CPU/meta-device until after `.setup()``
+        assert all(weight.device == expected_device for weight in model.parameters())
+        assert all(weight.dtype == expected_dtype for weight in model.parameters())
+        model = fabric.setup(model)
+        # Parameters get sharded in `.setup()` and moved to the target device
+        assert all(weight.device == torch.device("cuda", fabric.local_rank) for weight in model.parameters())
+        assert all(weight.dtype == expected_dtype for weight in model.parameters())
+
+    _run_setup_assertions(empty_init=False, expected_device=torch.device("cpu"))
+    _run_setup_assertions(empty_init=True, expected_device=torch.device("meta"))
+
+
 # @RunIf(min_cuda_gpus=2, standalone=True)
 # def test_save_filter(tmp_path):
 #     fabric = Fabric(accelerator="cuda", strategy=FSDPStrategy(state_dict_type="full"), devices=2)
@@ -678,34 +635,6 @@ def test_fsdp2_tensor_parallel():
 #
 #     wrappers = {name for name, mod in model._forward_module.named_modules() if isinstance(mod, CheckpointWrapper)}
 #     assert wrappers == {"_fsdp_wrapped_module.0", "_fsdp_wrapped_module.1"}
-#
-#
-# @RunIf(min_cuda_gpus=1)
-# def test_rewrap_warnings():
-#     from torch.distributed.fsdp import FullyShardedDataParallel
-#     from torch.distributed.fsdp.wrap import wrap
-#
-#     strategy = FSDPStrategy(auto_wrap_policy={torch.nn.Linear})
-#     fabric = Fabric(devices=1, accelerator="cuda", strategy=strategy)
-#     fabric.launch()
-#     with fabric.init_module():
-#         model = torch.nn.Sequential(torch.nn.Linear(1, 1), torch.nn.ReLU(), wrap(torch.nn.Linear(1, 1)))
-#     with pytest.warns(match="the model is already wrapped"):
-#         model = fabric.setup(model)
-#     assert not isinstance(model._forward_module, FullyShardedDataParallel)
-#     assert isinstance(model._forward_module[2], FullyShardedDataParallel)
-#
-#     if not _TORCH_GREATER_EQUAL_2_1:
-#         return
-#
-#     with fabric.init_module(empty_init=True):
-#         model = torch.nn.Sequential(torch.nn.Linear(1, 1), torch.nn.ReLU(), wrap(torch.nn.Linear(1, 1)))
-#     assert model[0].weight.is_meta
-#     with pytest.warns(match="there are still parameters on the meta device"):
-#         fabric_model = fabric.setup(model)
-#     assert next(fabric_model.parameters()).is_meta
-#
-#
 # @RunIf(min_cuda_gpus=2, standalone=True)
 # @pytest.mark.parametrize(
 #     "precision",
