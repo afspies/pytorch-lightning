@@ -75,7 +75,7 @@ def test_parallelize_fn_call():
     model = nn.Linear(2, 2)
     optimizer = Adam(model.parameters())
 
-    parallel_model_mock = Mock(spec=nn.Module, modules=Mock(return_value=[]))
+    parallel_model_mock = Mock(spec=nn.Module, parameters=Mock(return_value=[]), buffers=Mock(return_value=[]))
     parallelize_fn = Mock(return_value=parallel_model_mock)
     strategy = ModelParallelStrategy(parallelize_fn=parallelize_fn)
     strategy._device_mesh = Mock()
@@ -143,6 +143,7 @@ def test_set_timeout(init_process_group_mock, _):
     )
 
 
+@RunIf(min_torch="2.3")
 def test_meta_device_materialization():
     """Test that the `setup_module()` method materializes meta-device tensors in the module."""
     class NoResetParameters(nn.Module):
@@ -172,6 +173,5 @@ def test_meta_device_materialization():
 
     with pytest.warns(UserWarning, match=r"`reset_parameters\(\)` method for re-initialization: NoResetParameters"):
         model = strategy.setup_module(model)
-    assert model.layer1.weight.is_meta
-    assert not model.layer2.weight.is_meta
-    assert not model.buffer.is_meta
+    assert all(not p.is_meta for p in model.parameters())
+    assert all(not b.is_meta for b in model.buffers())

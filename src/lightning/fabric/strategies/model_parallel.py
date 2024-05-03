@@ -290,21 +290,25 @@ class ModelParallelStrategy(ParallelStrategy):
 def _materialize_module(module: Module, device: torch.device) -> None:
     # Reference: https://github.com/pytorch/torchtitan/blob/main/docs/fsdp.md#meta-device-initialization
     # TODO: Introduce `Fabric.materialize(module)` to give user control when materialization should happen
-    skipped_modules = set()
+    if not _has_meta_device_parameters_or_buffers(module):
+        return
+    
+    module.to_empty(device=device)  # has to be called on the root module
+    
+    uninitialized_modules = set()
     for submodule in module.modules():
-        if not _has_meta_device_parameters_or_buffers(submodule, recurse=False):
+        if not len(list(submodule.parameters(recurse=False))) and not len(list(submodule.buffers(recurse=False))):
             continue
         if callable(reset_method := getattr(submodule, "reset_parameters", None)):
-            submodule.to_empty(device=device, recurse=False)
             reset_method()
         else:
-            skipped_modules.add(type(submodule).__name__)
+            uninitialized_modules.add(type(submodule).__name__)
 
-    if skipped_modules:
+    if uninitialized_modules:
         rank_zero_warn(
-            "Parameter initialization incomplete. The following modules still have parameters on the meta device"
+            "Parameter initialization incomplete. The following modules have parameters or buffers with uninitialized memory"
             " because they don't define a `reset_parameters()` method for re-initialization:"
-            f" {', '.join(skipped_modules)}"
+            f" {', '.join(uninitialized_modules)}"
         )
 
 

@@ -38,8 +38,6 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=3e-3, foreach=True)
 # Set up model and optimizer
 model, optimizer = fabric.setup(model, optimizer)
 
-# Materialize meta-device and init weights. TODO: Rewrite model with reset_parameters()
-model.to_empty(device=fabric.device)
 model.init_weights()
 
 # Define dataset/dataloader
