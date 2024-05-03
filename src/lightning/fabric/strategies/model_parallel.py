@@ -11,25 +11,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import shutil
-from contextlib import ExitStack, nullcontext
+from contextlib import ExitStack
 from datetime import timedelta
-from functools import partial
-from pathlib import Path
 from typing import (
-    TYPE_CHECKING,
     Any,
     Callable,
     ContextManager,
     Dict,
-    Generator,
-    List,
     Literal,
     Optional,
-    Set,
-    Tuple,
-    Type,
-    Union,
+    Union
 )
 
 import torch
@@ -38,23 +29,20 @@ from torch import Tensor
 from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
 from torch.nn import Module
 from torch.optim import Optimizer
-from typing_extensions import TypeGuard, override
+from typing_extensions import override
 
 from lightning.fabric.strategies.fsdp import (
     _distributed_checkpoint_save,
     _distributed_checkpoint_load,
     _move_torchmetrics_to_device,
 )
-from lightning.fabric.plugins import CheckpointIO, ClusterEnvironment, Precision
+from lightning.fabric.plugins import CheckpointIO
 from lightning.fabric.plugins.collectives.torch_collective import default_pg_timeout
 from lightning.fabric.strategies.launchers.subprocess_script import _SubprocessScriptLauncher
 from lightning.fabric.strategies.parallel import ParallelStrategy
 from lightning.fabric.strategies.strategy import (
     TBroadcast,
-    _apply_filter,
     _BackwardSyncControl,
-    _Sharded,
-    _validate_keys_for_strict_loading,
 )
 from lightning.fabric.utilities.distributed import (
     ReduceOp,
@@ -65,14 +53,9 @@ from lightning.fabric.utilities.distributed import (
 )
 from lightning.fabric.utilities.distributed import group as _group
 from lightning.fabric.utilities.imports import _TORCH_GREATER_EQUAL_2_3
-from lightning.fabric.utilities.init import _EmptyInit
-from lightning.fabric.utilities.load import _METADATA_FILENAME, _lazy_load, _materialize_tensors, _move_state_into
-from lightning.fabric.utilities.rank_zero import rank_zero_deprecation, rank_zero_only, rank_zero_warn
+from lightning.fabric.utilities.rank_zero import rank_zero_only
 from lightning.fabric.utilities.seed import reset_seed
-from lightning.fabric.utilities.types import _PATH, _Stateful
-
-if TYPE_CHECKING:
-    from torch.distributed._composable.fsdp import FSDP
+from lightning.fabric.utilities.types import _PATH
 
 
 class ModelParallelStrategy(ParallelStrategy):
