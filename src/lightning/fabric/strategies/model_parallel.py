@@ -40,7 +40,11 @@ from torch.nn import Module
 from torch.optim import Optimizer
 from typing_extensions import TypeGuard, override
 
-from lightning.fabric.strategies.fsdp import _distributed_checkpoint_save, _distributed_checkpoint_load
+from lightning.fabric.strategies.fsdp import (
+    _distributed_checkpoint_save,
+    _distributed_checkpoint_load,
+    _move_torchmetrics_to_device,
+)
 from lightning.fabric.plugins import CheckpointIO, ClusterEnvironment, Precision
 from lightning.fabric.plugins.collectives.torch_collective import default_pg_timeout
 from lightning.fabric.strategies.launchers.subprocess_script import _SubprocessScriptLauncher
@@ -112,7 +116,7 @@ class ModelParallelStrategy(ParallelStrategy):
     @property
     def device_mesh(self) -> DeviceMesh:
         if self._device_mesh is None:
-            raise RuntimeError()  # TODO
+            raise RuntimeError("Accessing the device mesh before processes have initialized is not allowed.")
         return self._device_mesh
 
     @property
@@ -169,31 +173,25 @@ class ModelParallelStrategy(ParallelStrategy):
     @override
     def setup_module(self, module: Module) -> Module:
         module = self._parallelize_fn(module, self.device_mesh)
-        # TODO
-        # _move_torchmetrics_to_device(module, self.root_device)
+        _move_torchmetrics_to_device(module, self.root_device)
         return module
 
     @override
     def module_to_device(self, module: Module) -> None:
-        # TODO
         pass
 
     @override
     def module_init_context(self, empty_init: Optional[bool] = None) -> ContextManager:
         precision_init_ctx = self.precision.module_init_context()
-        # module_sharded_ctx = self.module_sharded_context()
-        empty_ctx = _EmptyInit(enabled=bool(empty_init))
         stack = ExitStack()
-        if _TORCH_GREATER_EQUAL_2_1 and empty_init:
-            # TODO
-            # Materialization happens in `setup`. When modules get wrapped by FSDP, the sequence of operations is:
-            # 1) materialize module 2) call `reset_parameters()` 3) shard the module.
-            # These operations are applied to each submodule 'bottom up' in the module hierarchy.
+        if empty_init:
+            # For FSDP/FSDP2 wrapped modules, materialization happens in `setup`.
+            #   When modules get wrapped, the sequence of operations is:
+            #   1) materialize module 2) call `reset_parameters()` 3) shard the module.
+            #   These operations are applied to each submodule 'bottom up' in the module hierarchy.
+            # For TP modules alone (ColwiseParallel, RowwiseParallel, etc.), there is no automated materialization.
             stack.enter_context(torch.device("meta"))
-        else:
-            stack.enter_context(empty_ctx)
         stack.enter_context(precision_init_ctx)
-        # stack.enter_context(module_sharded_ctx)
         return stack
 
     @override
@@ -230,25 +228,14 @@ class ModelParallelStrategy(ParallelStrategy):
         storage_options: Optional[Any] = None,
         filter: Optional[Dict[str, Callable[[str, Any], bool]]] = None,
     ) -> None:
-        """Save model, optimizer, and other state to a checkpoint on disk.
-
-        If the state-dict-type is ``'full'``, the checkpoint will be written to a single file containing the weights,
-        optimizer state and other metadata. If the state-dict-type is ``'sharded'``, the checkpoint gets saved as a
-        directory containing one file per process, with model- and optimizer shards stored per file. Additionally, it
-        creates a metadata file `meta.pt` with the rest of the user's state (only saved from rank 0).
-
-        """
+        """Save model, optimizer, and other state to a checkpoint on disk."""
         if storage_options is not None:
             raise TypeError(
                 f"`{self.__class__.__name__}.save_checkpoint(..., storage_options=...)` is not supported because"
                 f" `{self.__class__.__name__}` does not use the `CheckpointIO`."
             )
-        # TODO:
-        # if filter is not None and self._state_dict_type == "sharded":
-        #     # https://github.com/pytorch/pytorch/issues/105379
-        #     raise NotImplementedError(
-        #         "ModelParallel doesn't support loading sharded filtered checkpoints, so saving them is disabled."
-        #     )
+        if filter is not None:
+            raise NotImplementedError(f"{self.__class__.__name__} does not yet support the `filter` argument.")
         _distributed_checkpoint_save(state, path)
 
     @override
@@ -258,8 +245,15 @@ class ModelParallelStrategy(ParallelStrategy):
         state: Optional[Union[Module, Optimizer, Dict[str, Union[Module, Optimizer, Any]]]] = None,
         strict: bool = True,
     ) -> Dict[str, Any]:
-        # TODO:
+        if isinstance(state, Module) or isinstance(state, Optimizer):
+            raise NotImplementedError(
+                "Loading a module or optimizer object from a checkpoint directly is not yet supported."
+            )
+        if strict is False:
+            raise NotImplementedError(f"Non-strict loading is not yet supported in {self.__class__.__name__}.")
+
         _distributed_checkpoint_load(state, path)
+        return {}
 
     def _setup_distributed(self) -> None:
         reset_seed()
