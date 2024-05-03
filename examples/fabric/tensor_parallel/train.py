@@ -4,26 +4,10 @@ import torch.nn.functional as F
 
 from lightning.fabric.strategies import ModelParallelStrategy
 from torch.distributed.tensor.parallel import loss_parallel
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 
+from data import RandomTokenDataset
 from model import ModelArgs, Transformer, parallelize
-
-
-class RandomTokenDataset(Dataset):
-    def __init__(self, vocab_size: int, seq_length: int):
-        self.vocab_size = vocab_size
-        self.seq_length = seq_length
-        self.tokens = torch.randint(
-            self.vocab_size, 
-            size=(len(self), self.seq_length + 1),
-            generator=torch.Generator().manual_seed(42),
-        )
-
-    def __len__(self) -> int:
-        return 128
-
-    def __getitem__(self, item: int):
-        return self.tokens[item]
 
 
 fabric = L.Fabric(

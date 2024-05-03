@@ -11,25 +11,17 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import shutil
-from contextlib import ExitStack, nullcontext
+from contextlib import ExitStack
 from datetime import timedelta
-from functools import partial
 from pathlib import Path
 from typing import (
-    TYPE_CHECKING,
     Any,
     Callable,
     ContextManager,
     Dict,
-    Generator,
-    List,
     Literal,
     Optional,
-    Set,
-    Tuple,
-    Type,
-    Union,
+    Union, TypeVar
 )
 
 import torch
@@ -38,7 +30,7 @@ from torch import Tensor
 from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
 from torch.nn import Module
 from torch.optim import Optimizer
-from typing_extensions import TypeGuard, override
+from typing_extensions import override
 
 from lightning.fabric.strategies.fsdp import (
     _distributed_checkpoint_save,
@@ -46,16 +38,13 @@ from lightning.fabric.strategies.fsdp import (
     _has_meta_device_parameters,
     _move_torchmetrics_to_device,
 )
-from lightning.fabric.plugins import CheckpointIO, ClusterEnvironment, Precision
+from lightning.fabric.plugins import CheckpointIO
 from lightning.fabric.plugins.collectives.torch_collective import default_pg_timeout
 from lightning.fabric.strategies.launchers.subprocess_script import _SubprocessScriptLauncher
 from lightning.fabric.strategies.parallel import ParallelStrategy
 from lightning.fabric.strategies.strategy import (
     TBroadcast,
-    _apply_filter,
     _BackwardSyncControl,
-    _Sharded,
-    _validate_keys_for_strict_loading,
 )
 from lightning.fabric.utilities.distributed import (
     ReduceOp,
@@ -66,14 +55,11 @@ from lightning.fabric.utilities.distributed import (
 )
 from lightning.fabric.utilities.distributed import group as _group
 from lightning.fabric.utilities.imports import _TORCH_GREATER_EQUAL_2_3
-from lightning.fabric.utilities.init import _EmptyInit
-from lightning.fabric.utilities.load import _METADATA_FILENAME, _lazy_load, _materialize_tensors, _move_state_into
-from lightning.fabric.utilities.rank_zero import rank_zero_deprecation, rank_zero_only, rank_zero_warn
+from lightning.fabric.utilities.rank_zero import rank_zero_only
 from lightning.fabric.utilities.seed import reset_seed
-from lightning.fabric.utilities.types import _PATH, _Stateful
+from lightning.fabric.utilities.types import _PATH
 
-if TYPE_CHECKING:
-    from torch.distributed._composable.fsdp import FSDP
+TModel = TypeVar("TModel", bound=Module)
 
 
 class ModelParallelStrategy(ParallelStrategy):
@@ -95,7 +81,7 @@ class ModelParallelStrategy(ParallelStrategy):
 
     def __init__(
         self,
-        parallelize_fn: Callable[[Module, DeviceMesh], Module],
+        parallelize_fn: Callable[[TModel, DeviceMesh], TModel],
         data_parallel_size: Union[Literal["auto"], int] = "auto",
         tensor_parallel_size:  Union[Literal["auto"], int] = "auto",
         process_group_backend: Optional[str] = None,
@@ -255,6 +241,9 @@ class ModelParallelStrategy(ParallelStrategy):
             )
         if filter is not None:
             raise NotImplementedError(f"{self.__class__.__name__} does not yet support the `filter` argument.")
+
+        # broadcast the path from rank 0 to ensure all the states are saved in a common path
+        path = Path(self.broadcast(path))
         _distributed_checkpoint_save(state, path)
 
     @override
@@ -271,7 +260,9 @@ class ModelParallelStrategy(ParallelStrategy):
         if strict is False:
             raise NotImplementedError(f"Non-strict loading is not yet supported in {self.__class__.__name__}.")
 
-        _distributed_checkpoint_load(state, path)
+        # broadcast the path from rank 0 to ensure all the states are loaded from a common path
+        path = Path(self.broadcast(path))
+        _distributed_checkpoint_load(state, path)  # type: ignore[arg-type]
         return {}
 
     def _setup_distributed(self) -> None:
