@@ -10,10 +10,8 @@ from data import RandomTokenDataset
 from model import ModelArgs, Transformer, parallelize
 
 
-fabric = L.Fabric(
-    accelerator="cuda",
-    devices="auto",
-    strategy=ModelParallelStrategy(
+def train():
+    strategy = ModelParallelStrategy(
         # User-defined function that applies the desired parallelizations specific to the model
         # (TP, FSDP2, activation checkpointing, ...)
         parallelize_fn=parallelize,
@@ -21,59 +19,62 @@ fabric = L.Fabric(
         # Set to "auto" to apply TP intra-node and DP inter-node
         data_parallel_size=2,
         tensor_parallel_size=2,
-    ),
-)
-fabric.launch()
+    )
 
-# Initialize the model
-model_args = ModelArgs(dim=256, n_layers=2, n_heads=16, vocab_size=32000)
-with fabric.init_module(empty_init=True):
-    model = Transformer(model_args)
-    
-fabric.print(f"Number of parameters: {sum(p.numel() for p in model.parameters()) / 1e9:.1f} B")
+    fabric = L.Fabric(accelerator="cuda", devices="auto", strategy=strategy)
+    fabric.launch()
 
-# Define the optimizer
-optimizer = torch.optim.AdamW(model.parameters(), lr=3e-3, foreach=True)
+    # Initialize the model
+    model_args = ModelArgs(vocab_size=32000)
+    with fabric.init_module(empty_init=True):
+        model = Transformer(model_args)
+        
+    fabric.print(f"Number of parameters: {sum(p.numel() for p in model.parameters()) / 1e9:.1f} B")
 
-# Set up model and optimizer
-model, optimizer = fabric.setup(model, optimizer)
+    # Define the optimizer
+    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-3, foreach=True)
 
-model.init_weights()
+    # Set up model and optimizer
+    model, optimizer = fabric.setup(model, optimizer)
 
-# Define dataset/dataloader
-dataset = RandomTokenDataset(vocab_size=model_args.vocab_size, seq_length=2048)
-dataloader = DataLoader(dataset, batch_size=8)
+    model.init_weights()
 
-# Fabric configures the sampler automatically for you such that
-# all batches in a tensor-parallel group are identical
-dataloader = fabric.setup_dataloaders(dataloader)
+    # Define dataset/dataloader
+    dataset = RandomTokenDataset(vocab_size=model_args.vocab_size, seq_length=128)
+    dataloader = DataLoader(dataset, batch_size=8)
 
-# Simplified training loop
-fabric.print("Starting training ...")
+    # Fabric configures the sampler automatically for you such that
+    # all batches in a tensor-parallel group are identical
+    dataloader = fabric.setup_dataloaders(dataloader)
 
-for i, batch in enumerate(dataloader):
-    inputs = batch[:, :-1]
-    labels = batch[:, 1:]
+    # Simplified training loop
+    fabric.print("Starting training ...")
 
-    output = model(inputs)
+    for i, batch in enumerate(dataloader):
+        inputs = batch[:, :-1]
+        labels = batch[:, 1:]
 
-    with loss_parallel():
-        loss = F.cross_entropy(output.reshape(-1, output.size(-1)), labels.reshape(-1))
+        output = model(inputs)
 
-    fabric.backward(loss)
-    optimizer.step()
-    optimizer.zero_grad()
-    fabric.print(f"Iteration {i} complete")
+        with loss_parallel():
+            loss = F.cross_entropy(output.reshape(-1, output.size(-1)), labels.reshape(-1))
 
-
-# Save a (distributed) checkpoint
-# See `fabric consolidate --help` if you need to convert the checkpoint to a single file
-state = {"model": model, "optimizer": optimizer, "iteration": i}
-fabric.save("checkpoint.pt", state)
+        fabric.backward(loss)
+        optimizer.step()
+        optimizer.zero_grad()
+        fabric.print(f"Iteration {i} complete")
 
 
-fabric.print("Training successfully completed!")
-fabric.print(f"Peak memory usage: {torch.cuda.max_memory_reserved() / 1e9:.02f} GB")
+    # See `fabric consolidate --help` if you need to convert the checkpoint to a single file
+    fabric.print("Saving a (distributed) checkpoint ...")
+    state = {"model": model, "optimizer": optimizer, "iteration": i}
+    fabric.save("checkpoint.pt", state)
 
-# Avoid warning in PyTorch 2.4
-torch.distributed.destroy_process_group()
+    fabric.print("Training successfully completed!")
+    fabric.print(f"Peak memory usage: {torch.cuda.max_memory_reserved() / 1e9:.02f} GB")
+
+
+if __name__ == "__main__":
+    assert torch.cuda.device_count() >= 4, "This example requires at least 4 GPUs with 24 GB of memory each."
+    torch.set_float32_matmul_precision("high")
+    train()
