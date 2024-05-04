@@ -131,6 +131,12 @@ def _parallelize_feed_forward_fsdp2(model, device_mesh):
     return model
 
 
+def _parallelize_feed_forward_fsdp2_tp(model, device_mesh):
+    model = _parallelize_feed_forward_tp(model, device_mesh)
+    model = _parallelize_feed_forward_fsdp2(model, device_mesh)
+    return model
+
+
 @RunIf(min_torch="2.3", standalone=True, min_cuda_gpus=2)
 def test_tensor_parallel():
     strategy = ModelParallelStrategy(parallelize_fn=_parallelize_feed_forward_tp)
@@ -167,12 +173,6 @@ def test_tensor_parallel():
         fabric.backward(output.sum())
         optimizer.step()
         optimizer.zero_grad()
-
-
-def _parallelize_feed_forward_fsdp2_tp(model, device_mesh):
-    model = _parallelize_feed_forward_tp(model, device_mesh)
-    model = _parallelize_feed_forward_fsdp2(model, device_mesh)
-    return model
 
 
 @RunIf(min_torch="2.3", standalone=True, min_cuda_gpus=4)
@@ -608,92 +608,81 @@ def test_module_init_context(precision, expected_dtype):
 #     with pytest.raises(NotImplementedError, match="doesn't support loading sharded filtered"):
 #         fabric.save(checkpoint_path, state, filter=filter)
 #
-#
-# @RunIf(min_cuda_gpus=1)
-# def test_manual_activation_checkpointing():
-#     model = torch.nn.Sequential(torch.nn.Linear(1, 1), torch.nn.Linear(1, 1))
-#     strategy = FSDPStrategy(activation_checkpointing_policy={torch.nn.Linear})
-#     fabric = Fabric(devices=1, accelerator="cuda", strategy=strategy)
-#     fabric.launch()
-#
-#     from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
-#         CheckpointWrapper,
-#         apply_activation_checkpointing,
-#     )
-#
-#     # manually apply activation checkpointing
-#     apply_activation_checkpointing(model)
-#
-#     wrappers = {name for name, mod in model.named_modules() if isinstance(mod, CheckpointWrapper)}
-#     assert wrappers == {"0", "1"}
-#
-#     # let fabric set up the model, it shouldn't apply activation checkpointing again
-#     with pytest.warns(match="is configured, but the model already contains checkpointed"):
-#         model = fabric.setup(model)
-#
-#     wrappers = {name for name, mod in model._forward_module.named_modules() if isinstance(mod, CheckpointWrapper)}
-#     assert wrappers == {"_fsdp_wrapped_module.0", "_fsdp_wrapped_module.1"}
-# @RunIf(min_cuda_gpus=2, standalone=True)
-# @pytest.mark.parametrize(
-#     "precision",
-#     [
-#         "32-true",
-#         pytest.param("16-mixed"),
-#         pytest.param("bf16-mixed", marks=RunIf(bf16_cuda=True)),
-#     ],
-# )
-# @pytest.mark.parametrize(
-#     "clip_type",
-#     [
-#         pytest.param("norm", marks=pytest.mark.skip("FSDP gradient clipping by norm is not correct.")),
-#         "val",
-#     ],
-# )
-# def test_clip_gradients(clip_type, precision):
-#     if clip_type == "norm" and precision == "16-mixed":
-#         pytest.skip(reason="Clipping by norm with 16-mixed is numerically unstable.")
-#
-#     strategy = FSDPStrategy(auto_wrap_policy={torch.nn.Linear})
-#     fabric = Fabric(accelerator="auto", devices=2, precision=precision, strategy=strategy)
-#     fabric.launch()
-#
-#     in_features, out_features = 32, 2
-#     model = torch.nn.Linear(in_features, out_features, bias=False)
-#     model.weight.data.fill_(0.01)
-#
-#     optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
-#     model, optimizer = fabric.setup(model, optimizer)
-#
-#     batch = torch.full((1, in_features), 0.1, device=fabric.device)
-#     loss = model(batch).sum()
-#
-#     # The example is constructed such that the gradients are all the same
-#     fabric.backward(loss)
-#
-#     from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-#
-#     if clip_type == "norm":
-#         with FSDP.summon_full_params(model._forward_module, with_grads=True):
-#             norm = torch.linalg.vector_norm(model.weight.grad.detach().cpu(), 2, dtype=torch.float32).item()
-#         new_norm = norm / 10
-#         fabric.clip_gradients(model, optimizer, max_norm=new_norm * 10)
-#         with FSDP.summon_full_params(model._forward_module, with_grads=True):
-#             assert torch.allclose(
-#                 torch.linalg.vector_norm(model.weight.grad.detach().cpu(), 2, dtype=torch.float32),
-#                 torch.tensor(new_norm),
-#             )
-#     elif clip_type == "val":
-#         val = model.weight.grad[0].item()
-#         new_val = val / 2.0
-#         fabric.clip_gradients(model, optimizer, clip_val=new_val)
-#         assert torch.allclose(model.weight.grad, torch.full_like(model.weight.grad, new_val))
-#     else:
-#         raise AssertionError(f"Unknown clip type: {clip_type}")
-#
-#     optimizer.step()
-#     optimizer.zero_grad()
-#
-#
+
+
+def _parallelize_single_linear_tp_fsdp2(model, device_mesh):
+    from torch.distributed.tensor.parallel import ColwiseParallel, parallelize_module
+    from torch.distributed._composable.fsdp.fully_shard import fully_shard
+
+    dp_mesh = device_mesh["data_parallel"]
+    tp_mesh = device_mesh["tensor_parallel"]
+    
+    parallelize_module(model, tp_mesh, ColwiseParallel())
+    fully_shard(model, mesh=dp_mesh)
+    return model
+
+
+@RunIf(min_cuda_gpus=2, standalone=True)
+@pytest.mark.parametrize(
+    "precision",
+    [
+        "32-true",
+        pytest.param("16-mixed"),
+        pytest.param("bf16-mixed", marks=RunIf(bf16_cuda=True)),
+    ],
+)
+@pytest.mark.parametrize(
+    "clip_type",
+    [
+        pytest.param("norm", marks=pytest.mark.skip("FSDP gradient clipping by norm is not correct.")),
+        pytest.param("val", marks=pytest.mark.xfail(raises=RuntimeError, reason="Clipping DTensor by value raises error in PyTorch")),
+    ],
+)
+def test_clip_gradients(clip_type, precision):
+    if clip_type == "norm" and precision == "16-mixed":
+        pytest.skip(reason="Clipping by norm with 16-mixed is numerically unstable.")
+
+    strategy = ModelParallelStrategy(_parallelize_single_linear_tp_fsdp2)
+    fabric = Fabric(accelerator="auto", devices=2, precision=precision, strategy=strategy)
+    fabric.launch()
+
+    in_features, out_features = 32, 2
+    model = torch.nn.Linear(in_features, out_features, bias=False)
+    model.weight.data.fill_(0.01)
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
+    model, optimizer = fabric.setup(model, optimizer)
+
+    batch = torch.full((1, in_features), 0.1, device=fabric.device)
+    loss = model(batch).sum()
+
+    # The example is constructed such that the gradients are all the same
+    fabric.backward(loss)
+
+    from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+
+    if clip_type == "norm":
+        # with FSDP.summon_full_params(model._forward_module, with_grads=True):
+        norm = torch.linalg.vector_norm(model.weight.grad.full_tensor().detach().cpu(), 2, dtype=torch.float32).item()
+        new_norm = norm / 10
+        fabric.clip_gradients(model, optimizer, max_norm=new_norm * 10)
+        # with FSDP.summon_full_params(model._forward_module, with_grads=True):
+        assert torch.allclose(
+            torch.linalg.vector_norm(model.weight.grad.full_tensor().detach().cpu(), 2, dtype=torch.float32),
+            torch.tensor(new_norm),
+        )
+    elif clip_type == "val":
+        val = model.weight.grad.full_tensor()[0, 0].item()
+        new_val = val / 2.0
+        fabric.clip_gradients(model, optimizer, clip_val=new_val)
+        assert torch.allclose(model.weight.full_tensor().grad, torch.full_like(model.weight.grad, new_val))
+    else:
+        raise AssertionError(f"Unknown clip type: {clip_type}")
+
+    optimizer.step()
+    optimizer.zero_grad()
+
+
 # @RunIf(min_cuda_gpus=2, standalone=True, min_torch="2.3.0")
 # def test_save_sharded_and_consolidate_and_load(tmp_path):
 #     """Test the consolidation of a FSDP-sharded checkpoint into a single file."""
