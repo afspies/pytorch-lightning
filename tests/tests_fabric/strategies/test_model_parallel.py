@@ -27,6 +27,12 @@ from torch.optim import Adam
 from tests_fabric.helpers.runif import RunIf
 
 
+@mock.patch("lightning.fabric.strategies.model_parallel._TORCH_GREATER_EQUAL_2_3", False)
+def test_torch_greater_equal_2_3():
+    with pytest.raises(ImportError, match="ModelParallelStrategy requires PyTorch 2.3 or higher"):
+        ModelParallelStrategy(parallelize_fn=(lambda m, _: m))
+
+
 @RunIf(min_torch="2.3")
 def test_device_mesh_access():
     strategy = ModelParallelStrategy(parallelize_fn=(lambda m, _: m))
