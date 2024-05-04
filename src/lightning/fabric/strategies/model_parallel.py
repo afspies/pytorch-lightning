@@ -37,7 +37,6 @@ from lightning.fabric.strategies.fsdp import (
     _distributed_checkpoint_save,
     _distributed_checkpoint_load,
     _has_meta_device_parameters_or_buffers,
-    _move_torchmetrics_to_device,
 )
 from lightning.fabric.plugins import CheckpointIO
 from lightning.fabric.plugins.collectives.torch_collective import default_pg_timeout
@@ -166,9 +165,6 @@ class ModelParallelStrategy(ParallelStrategy):
                 f"The `parallelize_fn` must return a `nn.Module` instance, but got: {type(module).__name__}"
             )
         _materialize_module(module, self.root_device)
-
-        # TODO:      
-        # _move_torchmetrics_to_device(module, self.root_device)
         return module
 
     @override
@@ -291,6 +287,7 @@ class ModelParallelStrategy(ParallelStrategy):
 def _materialize_module(module: Module, device: torch.device) -> None:
     # Reference: https://github.com/pytorch/torchtitan/blob/main/docs/fsdp.md#meta-device-initialization
     # TODO: Introduce `Fabric.materialize(module)` to give user control when materialization should happen
+    # TODO: Make `torchmetrics.Metric` compatible with the `to_empty()` + `reset_parameters()` semantics
     if not _has_meta_device_parameters_or_buffers(module):
         return
     
