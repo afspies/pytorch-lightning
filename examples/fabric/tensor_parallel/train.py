@@ -19,7 +19,7 @@ def train():
         tensor_parallel_size=2,
     )
 
-    fabric = L.Fabric(accelerator="cuda", devices="auto", strategy=strategy)
+    fabric = L.Fabric(accelerator="cuda", devices=4, strategy=strategy)
     fabric.launch()
 
     # Initialize the model
@@ -27,7 +27,7 @@ def train():
     with fabric.init_module(empty_init=True):
         model = Transformer(model_args)
 
-    fabric.print(f"Number of parameters: {sum(p.numel() for p in model.parameters()) / 1e9:.1f} B")
+    fabric.print(f"Number of model parameters: {sum(p.numel() for p in model.parameters()) / 1e9:.1f} B")
 
     # Define the optimizer
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-3, foreach=True)
