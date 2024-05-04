@@ -19,12 +19,12 @@ from unittest.mock import Mock
 import pytest
 import torch
 import torch.nn as nn
-
-from tests_fabric.helpers.runif import RunIf
-from lightning.fabric.strategies.model_parallel import _ParallelBackwardSyncControl
 from lightning.fabric.plugins.environments import LightningEnvironment
 from lightning.fabric.strategies import ModelParallelStrategy
+from lightning.fabric.strategies.model_parallel import _ParallelBackwardSyncControl
 from torch.optim import Adam
+
+from tests_fabric.helpers.runif import RunIf
 
 
 @RunIf(min_torch="2.3")
@@ -60,7 +60,7 @@ def test_load_raw_unsupported(tmp_path):
     with pytest.raises(NotImplementedError, match="object from a checkpoint directly is not yet supported"):
         strategy.load_checkpoint(tmp_path / "checkpoint.pth", state=model)
     with pytest.raises(NotImplementedError, match="object from a checkpoint directly is not yet supported"):
-        strategy.load_checkpoint(tmp_path/ "checkpoint.pth", state=optimizer)
+        strategy.load_checkpoint(tmp_path / "checkpoint.pth", state=optimizer)
 
 
 @RunIf(min_torch="2.3")
@@ -99,6 +99,7 @@ def test_no_backward_sync():
     """Test that the backward sync control calls `.no_sync()`, and only on a module wrapped in
     FullyShardedDataParallel."""
     from torch.distributed._composable.fsdp import FSDP
+
     strategy = ModelParallelStrategy(parallelize_fn=(lambda m, _: m))
     assert isinstance(strategy._backward_sync_control, _ParallelBackwardSyncControl)
 
@@ -120,7 +121,9 @@ def test_no_backward_sync():
 def test_save_checkpoint_storage_options(tmp_path):
     """Test that the FSDP strategy does not accept storage options for saving checkpoints."""
     strategy = ModelParallelStrategy(parallelize_fn=(lambda m, _: m))
-    with pytest.raises(TypeError, match=escape("ModelParallelStrategy.save_checkpoint(..., storage_options=...)` is not")):
+    with pytest.raises(
+        TypeError, match=escape("ModelParallelStrategy.save_checkpoint(..., storage_options=...)` is not")
+    ):
         strategy.save_checkpoint(path=tmp_path, state=Mock(), storage_options=Mock())
 
 
@@ -146,6 +149,7 @@ def test_set_timeout(init_process_group_mock, _):
 @RunIf(min_torch="2.3")
 def test_meta_device_materialization():
     """Test that the `setup_module()` method materializes meta-device tensors in the module."""
+
     class NoResetParameters(nn.Module):
         def __init__(self):
             super().__init__()
@@ -160,7 +164,7 @@ def test_meta_device_materialization():
             self.register_buffer("buffer", torch.rand(2))
 
         def reset_parameters(self):
-            self.buffer.fill_(1.)
+            self.buffer.fill_(1.0)
 
     strategy = ModelParallelStrategy(parallelize_fn=(lambda x, _: x))
     strategy._device_mesh = Mock()

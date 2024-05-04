@@ -1016,7 +1016,7 @@ class Fabric:
             raise ValueError("An optimizer should be passed only once to the `setup` method.")
 
         if isinstance(self._strategy, FSDPStrategy) and any(
-                _has_meta_device_parameters_or_buffers(optimizer) for optimizer in optimizers
+            _has_meta_device_parameters_or_buffers(optimizer) for optimizer in optimizers
         ):
             raise RuntimeError(
                 "The optimizer has references to the model's meta-device parameters. Materializing them is"

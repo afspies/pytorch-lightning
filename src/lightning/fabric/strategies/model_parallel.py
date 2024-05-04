@@ -15,15 +15,7 @@ import itertools
 from contextlib import ExitStack
 from datetime import timedelta
 from pathlib import Path
-from typing import (
-    Any,
-    Callable,
-    ContextManager,
-    Dict,
-    Literal,
-    Optional,
-    Union, TypeVar
-)
+from typing import Any, Callable, ContextManager, Dict, Literal, Optional, TypeVar, Union
 
 import torch
 from lightning_utilities.core.rank_zero import rank_zero_only as utils_rank_zero_only
@@ -33,13 +25,13 @@ from torch.nn import Module
 from torch.optim import Optimizer
 from typing_extensions import override
 
-from lightning.fabric.strategies.fsdp import (
-    _distributed_checkpoint_save,
-    _distributed_checkpoint_load,
-    _has_meta_device_parameters_or_buffers,
-)
 from lightning.fabric.plugins import CheckpointIO
 from lightning.fabric.plugins.collectives.torch_collective import default_pg_timeout
+from lightning.fabric.strategies.fsdp import (
+    _distributed_checkpoint_load,
+    _distributed_checkpoint_save,
+    _has_meta_device_parameters_or_buffers,
+)
 from lightning.fabric.strategies.launchers.subprocess_script import _SubprocessScriptLauncher
 from lightning.fabric.strategies.parallel import ParallelStrategy
 from lightning.fabric.strategies.strategy import (
@@ -77,13 +69,14 @@ class ModelParallelStrategy(ParallelStrategy):
             sets this size to the number of nodes in the cluster.
         tensor_parallel_size: The number of devices within a tensor-parallel group. Defaults to ``"auto"``, which
             sets this size to the number of GPUs in a single node.
+
     """
 
     def __init__(
         self,
         parallelize_fn: Callable[[TModel, DeviceMesh], TModel],
         data_parallel_size: Union[Literal["auto"], int] = "auto",
-        tensor_parallel_size:  Union[Literal["auto"], int] = "auto",
+        tensor_parallel_size: Union[Literal["auto"], int] = "auto",
         process_group_backend: Optional[str] = None,
         timeout: Optional[timedelta] = default_pg_timeout,
     ) -> None:
@@ -269,7 +262,7 @@ class ModelParallelStrategy(ParallelStrategy):
         self._device_mesh = init_device_mesh(
             device_type=self.root_device.type,
             mesh_shape=(self._data_parallel_size, self._tensor_parallel_size),
-            mesh_dim_names=("data_parallel", "tensor_parallel")
+            mesh_dim_names=("data_parallel", "tensor_parallel"),
         )
 
     def _get_process_group_backend(self) -> str:
@@ -290,9 +283,9 @@ def _materialize_module(module: Module, device: torch.device) -> None:
     # TODO: Make `torchmetrics.Metric` compatible with the `to_empty()` + `reset_parameters()` semantics
     if not _has_meta_device_parameters_or_buffers(module):
         return
-    
+
     module.to_empty(device=device)  # has to be called on the root module
-    
+
     uninitialized_modules = set()
     for submodule in module.modules():
         if all(False for _ in itertools.chain(submodule.parameters(recurse=False), submodule.buffers(recurse=False))):

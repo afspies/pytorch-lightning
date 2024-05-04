@@ -1,13 +1,11 @@
 import lightning as L
 import torch
 import torch.nn.functional as F
-
+from data import RandomTokenDataset
 from lightning.fabric.strategies import ModelParallelStrategy
+from model import ModelArgs, Transformer, parallelize
 from torch.distributed.tensor.parallel import loss_parallel
 from torch.utils.data import DataLoader
-
-from data import RandomTokenDataset
-from model import ModelArgs, Transformer, parallelize
 
 
 def train():
@@ -28,7 +26,7 @@ def train():
     model_args = ModelArgs(vocab_size=32000)
     with fabric.init_module(empty_init=True):
         model = Transformer(model_args)
-        
+
     fabric.print(f"Number of parameters: {sum(p.numel() for p in model.parameters()) / 1e9:.1f} B")
 
     # Define the optimizer
@@ -63,7 +61,6 @@ def train():
         optimizer.step()
         optimizer.zero_grad()
         fabric.print(f"Iteration {i} complete")
-
 
     # See `fabric consolidate --help` if you need to convert the checkpoint to a single file
     fabric.print("Saving a (distributed) checkpoint ...")

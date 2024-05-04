@@ -18,12 +18,12 @@ from unittest import mock
 import pytest
 import torch
 import torch.nn as nn
-from torch.distributed._tensor import DTensor
-from torch.distributed.device_mesh import DeviceMesh
 import torch.nn.functional as F
 from lightning.fabric import Fabric
 from lightning.fabric.strategies import ModelParallelStrategy
 from lightning.fabric.utilities.load import _load_distributed_checkpoint
+from torch.distributed._tensor import DTensor
+from torch.distributed.device_mesh import DeviceMesh
 from torch.utils.data import DataLoader, DistributedSampler
 
 from tests_fabric.helpers.datasets import RandomDataset
@@ -112,10 +112,10 @@ def _parallelize_feed_forward_fsdp2(model, device_mesh):
     fully_shard(model.w1, mesh=dp_mesh)
     fully_shard(model.w2, mesh=dp_mesh)
     fully_shard(model.w3, mesh=dp_mesh)
-    
+
     # Activation checkpointing
     model = checkpoint_wrapper(model)
-    
+
     return model
 
 
@@ -130,7 +130,7 @@ def test_tensor_parallel():
     strategy = ModelParallelStrategy(parallelize_fn=_parallelize_feed_forward_tp)
     fabric = Fabric(accelerator="auto", devices=2, strategy=strategy)
     fabric.launch()
-    
+
     fabric.seed_everything(0)
 
     with fabric.init_module(empty_init=True):
@@ -152,11 +152,10 @@ def test_tensor_parallel():
     assert isinstance(dataloader.sampler, DistributedSampler)
 
     for _, batch in enumerate(dataloader):
-        
         # All batches must be identical across TP group
         batches = fabric.all_gather(batch)
         assert all(torch.equal(batches[0], batches[i]) for i in range(1, len(batches)))
-        
+
         output = model(batch)
         fabric.backward(output.sum())
         optimizer.step()
@@ -172,7 +171,7 @@ def test_fsdp2_tensor_parallel():
     )
     fabric = Fabric(accelerator="auto", devices=4, strategy=strategy)
     fabric.launch()
-    
+
     fabric.seed_everything(0)
 
     with fabric.init_module(empty_init=True):
@@ -206,7 +205,7 @@ def test_fsdp2_tensor_parallel():
         # Batches across the DP dimension must be different
         batches_dp = batches[dp_mesh.mesh]
         assert all(not torch.equal(batches_dp[0], batches_dp[i]) for i in range(1, len(batches_dp)))
-        
+
         output = model(batch)
         fabric.backward(output.sum())
         optimizer.step()
@@ -214,12 +213,17 @@ def test_fsdp2_tensor_parallel():
 
 
 @RunIf(min_torch="2.3", min_cuda_gpus=4, standalone=True)
-@pytest.mark.parametrize("precision", [
-    pytest.param("16-mixed", marks=pytest.mark.xfail(reason="Precision plugin does not implement ShardedGradScaler yet")),
-    pytest.param("bf16-mixed", marks=RunIf(bf16_cuda=True)),
-])
+@pytest.mark.parametrize(
+    "precision",
+    [
+        pytest.param(
+            "16-mixed", marks=pytest.mark.xfail(reason="Precision plugin does not implement ShardedGradScaler yet")
+        ),
+        pytest.param("bf16-mixed", marks=RunIf(bf16_cuda=True)),
+    ],
+)
 def test_train_save_load(precision, tmp_path):
-    """Test 2D-parallel training, saving and loading precision settings."""    
+    """Test 2D-parallel training, saving and loading precision settings."""
     strategy = ModelParallelStrategy(
         _parallelize_feed_forward_fsdp2_tp,
         data_parallel_size=2,
@@ -227,7 +231,7 @@ def test_train_save_load(precision, tmp_path):
     )
     fabric = Fabric(accelerator="cuda", devices=4, strategy=strategy, precision=precision)
     fabric.launch()
-    
+
     fabric.seed_everything(0)
     with fabric.init_module(empty_init=True):
         model = FeedForward()
@@ -244,7 +248,13 @@ def test_train_save_load(precision, tmp_path):
     params_before = list(p.full_tensor().clone() for p in model.parameters())
     state = {"model": model, "optimizer": optimizer, "steps": 1}
     fabric.save(checkpoint_path, state)
-    assert set(os.listdir(checkpoint_path)) == {".metadata", "__0_0.distcp", "__1_0.distcp", "__2_0.distcp", "__3_0.distcp"}
+    assert set(os.listdir(checkpoint_path)) == {
+        ".metadata",
+        "__0_0.distcp",
+        "__1_0.distcp",
+        "__2_0.distcp",
+        "__3_0.distcp",
+    }
 
     # re-init all objects and resume
     strategy = ModelParallelStrategy(
@@ -254,7 +264,7 @@ def test_train_save_load(precision, tmp_path):
     )
     fabric = Fabric(accelerator="cuda", devices=4, strategy=strategy, precision=precision)
     fabric.launch()
-    
+
     fabric.seed_everything(0)
     with fabric.init_module(empty_init=True):
         model = FeedForward()
@@ -345,12 +355,12 @@ def test_module_init_context(precision, expected_dtype):
 
 
 def _parallelize_single_linear_tp_fsdp2(model, device_mesh):
-    from torch.distributed.tensor.parallel import ColwiseParallel, parallelize_module
     from torch.distributed._composable.fsdp.fully_shard import fully_shard
+    from torch.distributed.tensor.parallel import ColwiseParallel, parallelize_module
 
     dp_mesh = device_mesh["data_parallel"]
     tp_mesh = device_mesh["tensor_parallel"]
-    
+
     parallelize_module(model, tp_mesh, ColwiseParallel())
     fully_shard(model, mesh=dp_mesh)
     return model
@@ -369,7 +379,10 @@ def _parallelize_single_linear_tp_fsdp2(model, device_mesh):
     "clip_type",
     [
         pytest.param("norm", marks=pytest.mark.skip("Gradient clipping by norm is not correct.")),
-        pytest.param("val", marks=pytest.mark.xfail(raises=RuntimeError, reason="Clipping DTensor by value raises error in PyTorch")),
+        pytest.param(
+            "val",
+            marks=pytest.mark.xfail(raises=RuntimeError, reason="Clipping DTensor by value raises error in PyTorch"),
+        ),
     ],
 )
 def test_clip_gradients(clip_type, precision):
@@ -439,7 +452,11 @@ def test_save_sharded_and_consolidate_and_load(tmp_path):
     checkpoint_path_sharded = fabric.broadcast(str(tmp_path / "checkpoint_sharded"))
     fabric.save(checkpoint_path_sharded, state)
     assert set(os.listdir(checkpoint_path_sharded)) == {
-        ".metadata", "__0_0.distcp", "__1_0.distcp", "__2_0.distcp", "__3_0.distcp"
+        ".metadata",
+        "__0_0.distcp",
+        "__1_0.distcp",
+        "__2_0.distcp",
+        "__3_0.distcp",
     }
 
     # consolidate the checkpoint to a single file
@@ -453,8 +470,9 @@ def test_save_sharded_and_consolidate_and_load(tmp_path):
     strategy = ModelParallelStrategy(_parallelize_feed_forward_fsdp2_tp)
     fabric = Fabric(accelerator="cuda", devices=4, strategy=strategy)
     fabric.launch()
-    
+
     import time
+
     print(checkpoint_path_full)
     time.sleep(60)
 

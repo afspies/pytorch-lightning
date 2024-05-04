@@ -399,6 +399,7 @@ def test_set_timeout(init_process_group_mock):
 def test_has_meta_device_parameters_or_buffers():
     """Test that the `_has_meta_device_parameters_or_buffers` function can find meta-device parameters in models and
     optimizers."""
+
     class BufferModule(nn.Module):
         def __init__(self):
             super().__init__()

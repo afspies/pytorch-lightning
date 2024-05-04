@@ -7,11 +7,11 @@ from typing import Optional, Tuple
 import torch
 import torch.nn.functional as F
 from torch import nn
-from torch.distributed._composable.fsdp.fully_shard import fully_shard
 from torch.distributed._composable.fsdp import MixedPrecisionPolicy
+from torch.distributed._composable.fsdp.fully_shard import fully_shard
+from torch.distributed._tensor import Replicate, Shard
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import checkpoint_wrapper
 from torch.distributed.device_mesh import DeviceMesh
-from torch.distributed._tensor import Replicate, Shard
 from torch.distributed.tensor.parallel import (
     ColwiseParallel,
     PrepareModuleInput,
@@ -40,8 +40,7 @@ class ModelArgs:
 
 
 def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
-    """
-    Precompute the frequency tensor for complex exponentials (cis) with given dimensions.
+    """Precompute the frequency tensor for complex exponentials (cis) with given dimensions.
 
     This function calculates a frequency tensor with complex exponentials using the given dimension 'dim'
     and the end index 'end'. The 'theta' parameter scales the frequencies.
@@ -54,6 +53,7 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
 
     Returns:
         torch.Tensor: Precomputed frequency tensor with complex exponentials.
+
     """
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end, device=freqs.device)  # type: ignore
@@ -63,8 +63,7 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
 
 
 def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
-    """
-    Reshape frequency tensor for broadcasting it with another tensor.
+    """Reshape frequency tensor for broadcasting it with another tensor.
 
     This function reshapes the frequency tensor to have the same shape as the target tensor 'x'
     for the purpose of broadcasting the frequency tensor during element-wise operations.
@@ -75,6 +74,7 @@ def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
 
     Returns:
         torch.Tensor: Reshaped frequency tensor.
+
     """
     ndim = x.ndim
     assert 0 <= 1 < ndim
@@ -88,8 +88,7 @@ def apply_rotary_emb(
     xk: torch.Tensor,
     freqs_cis: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Apply rotary embeddings to input tensors using the given frequency tensor.
+    """Apply rotary embeddings to input tensors using the given frequency tensor.
 
     This function applies rotary embeddings to the given query 'xq' and key 'xk' tensors using the provided
     frequency tensor 'freqs_cis'. The input tensors are reshaped as complex numbers, and the frequency tensor
@@ -103,6 +102,7 @@ def apply_rotary_emb(
 
     Returns:
         Tuple[torch.Tensor, torch.Tensor]: Tuple of modified query tensor and key tensor with rotary embeddings.
+
     """
     xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
     xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
@@ -125,8 +125,7 @@ def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
 
 
 class RMSNorm(nn.Module):
-    """
-    Initialize the RMSNorm normalization layer.
+    """Initialize the RMSNorm normalization layer.
 
     Args:
         dim (int): The dimension of the input tensor.
@@ -155,8 +154,7 @@ class RMSNorm(nn.Module):
 
 
 class Attention(nn.Module):
-    """
-    Multi-head attention module.
+    """Multi-head attention module.
 
     Args:
         model_args (ModelArgs): Model configuration arguments.
@@ -196,8 +194,7 @@ class Attention(nn.Module):
         x: torch.Tensor,
         freqs_cis: torch.Tensor,
     ):
-        """
-        Forward pass of the attention module.
+        """Forward pass of the attention module.
 
         Args:
             x (torch.Tensor): Input tensor.
@@ -231,8 +228,7 @@ class Attention(nn.Module):
 
 
 class FeedForward(nn.Module):
-    """
-    FeedForward module
+    """FeedForward module.
 
     Args:
         dim (int): Input dimension.
@@ -275,8 +271,7 @@ class FeedForward(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    """
-    TransformerBlock Module
+    """TransformerBlock Module.
 
     Args:
         layer_id (int): Identifier for the layer.
@@ -321,8 +316,7 @@ class TransformerBlock(nn.Module):
         x: torch.Tensor,
         freqs_cis: torch.Tensor,
     ):
-        """
-        Perform a forward pass through the TransformerBlock.
+        """Perform a forward pass through the TransformerBlock.
 
         Args:
             x (torch.Tensor): Input tensor.
@@ -344,8 +338,7 @@ class TransformerBlock(nn.Module):
 
 
 class Transformer(nn.Module):
-    """
-    Transformer Module
+    """Transformer Module.
 
     Args:
         model_args (ModelArgs): Model configuration arguments.
@@ -385,7 +378,7 @@ class Transformer(nn.Module):
 
         self.norm = RMSNorm(dim=model_args.dim, eps=model_args.norm_eps)
         self.output = nn.Linear(model_args.dim, model_args.vocab_size, bias=False)
-    
+
     def reset_parameters(self):
         with torch.device(self.freqs_cis.device):
             self.freqs_cis = precompute_freqs_cis(
@@ -396,8 +389,9 @@ class Transformer(nn.Module):
             )
 
     def init_weights(self):
-        """
-        [Note: On ``init_weights`` vs. ``reset_parameters``]
+        """[Note: On ``init_weights`` vs.
+
+        ``reset_parameters``]
         Modules may define ``reset_parameters`` to initialize parameter values.
         ``reset_parameters`` is meant to only initialize directly owned
         parameters/buffers, not those of their child modules, and it can be
@@ -406,6 +400,7 @@ class Transformer(nn.Module):
         different from that in ``reset_parameters``. For this, we define
         ``init_weights``. We only call it in the constructor of this
         ``Transformer`` root module to avoid reinitializing tensors.
+
         """
         nn.init.normal_(self.tok_embeddings.weight)
         for layer in self.layers:
@@ -422,8 +417,7 @@ class Transformer(nn.Module):
         )
 
     def forward(self, tokens: torch.Tensor):
-        """
-        Perform a forward pass through the Transformer model.
+        """Perform a forward pass through the Transformer model.
 
         Args:
             tokens (torch.Tensor): Input token indices.
@@ -445,8 +439,7 @@ class Transformer(nn.Module):
 
     @classmethod
     def from_model_args(cls, model_args: ModelArgs) -> "Transformer":
-        """
-        Initialize a Transformer model from a ModelArgs object.
+        """Initialize a Transformer model from a ModelArgs object.
 
         Args:
             model_args (ModelArgs): Model configuration arguments.
@@ -461,11 +454,11 @@ class Transformer(nn.Module):
 # Taken and modified from torchtitan
 # https://github.com/pytorch/torchtitan/blob/main/torchtitan/parallelisms/parallelize_llama.py
 def parallelize(model: Transformer, device_mesh: DeviceMesh) -> Transformer:
-    """
-    Apply parallelisms and activation checkpointing to the model.
+    """Apply parallelisms and activation checkpointing to the model.
 
     NOTE: The passed-in model preferably should be on meta device. Otherwise,
     the model must fit on GPU or CPU memory.
+
     """
 
     dp_mesh = device_mesh["data_parallel"]
@@ -523,9 +516,7 @@ def parallelize(model: Transformer, device_mesh: DeviceMesh) -> Transformer:
     if dp_mesh.size() > 1:
         assert dp_mesh.ndim == 1  # Hybrid-sharding not supported
 
-        mp_policy = MixedPrecisionPolicy(
-            param_dtype=torch.bfloat16, reduce_dtype=torch.float32
-        )
+        mp_policy = MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.float32)
         fsdp_config = {"mesh": dp_mesh, "mp_policy": mp_policy}
         for layer_id, transformer_block in enumerate(model.layers):
             # Apply activation checkpointing
