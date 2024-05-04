@@ -229,7 +229,7 @@ class ModelParallelStrategy(ParallelStrategy):
         state: Optional[Union[Module, Optimizer, Dict[str, Union[Module, Optimizer, Any]]]] = None,
         strict: bool = True,
     ) -> Dict[str, Any]:
-        if isinstance(state, Module) or isinstance(state, Optimizer):
+        if isinstance(state, (Module, Optimizer)):
             raise NotImplementedError(
                 "Loading a module or optimizer object from a checkpoint directly is not yet supported."
             )

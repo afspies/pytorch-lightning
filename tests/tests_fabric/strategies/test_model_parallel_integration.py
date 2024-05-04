@@ -245,7 +245,7 @@ def test_train_save_load(precision, tmp_path):
 
     checkpoint_path = fabric.broadcast(str(tmp_path / "dist-checkpoint"))
 
-    params_before = list(p.full_tensor().clone() for p in model.parameters())
+    params_before = [p.full_tensor().clone() for p in model.parameters()]
     state = {"model": model, "optimizer": optimizer, "steps": 1}
     fabric.save(checkpoint_path, state)
     assert set(os.listdir(checkpoint_path)) == {

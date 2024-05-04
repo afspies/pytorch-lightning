@@ -58,8 +58,7 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end, device=freqs.device)  # type: ignore
     freqs = torch.outer(t, freqs).float()  # type: ignore
-    freqs_cis = torch.polar(torch.ones_like(freqs), freqs)  # complex64
-    return freqs_cis
+    return torch.polar(torch.ones_like(freqs), freqs)  # complex64
 
 
 def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
@@ -327,8 +326,7 @@ class TransformerBlock(nn.Module):
 
         """
         h = x + self.attention(self.attention_norm(x), freqs_cis)
-        out = h + self.feed_forward(self.ffn_norm(h))
-        return out
+        return h + self.feed_forward(self.ffn_norm(h))
 
     def init_weights(self):
         for norm in (self.attention_norm, self.ffn_norm):
@@ -434,8 +432,7 @@ class Transformer(nn.Module):
         for layer in self.layers:
             h = layer(h, freqs_cis)
         h = self.norm(h)
-        output = self.output(h).float()
-        return output
+        return self.output(h).float()
 
     @classmethod
     def from_model_args(cls, model_args: ModelArgs) -> "Transformer":
