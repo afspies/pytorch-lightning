@@ -15,7 +15,7 @@ import itertools
 from contextlib import ExitStack
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, Callable, ContextManager, Dict, Literal, Optional, TypeVar, Union, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable, ContextManager, Dict, Literal, Optional, TypeVar, Union
 
 import torch
 from lightning_utilities.core.rank_zero import rank_zero_only as utils_rank_zero_only
