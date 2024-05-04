@@ -22,8 +22,6 @@ import torch.nn.functional as F
 from lightning.fabric import Fabric
 from lightning.fabric.strategies import ModelParallelStrategy
 from lightning.fabric.utilities.load import _load_distributed_checkpoint
-from torch.distributed._tensor import DTensor
-from torch.distributed.device_mesh import DeviceMesh
 from torch.utils.data import DataLoader, DistributedSampler
 
 from tests_fabric.helpers.datasets import RandomDataset
@@ -32,6 +30,8 @@ from tests_fabric.helpers.runif import RunIf
 
 @RunIf(min_torch="2.3", standalone=True, min_cuda_gpus=4)
 def test_setup_device_mesh():
+    from torch.distributed.device_mesh import DeviceMesh
+
     for dp_size, tp_size in ((1, 4), (4, 1), (2, 2)):
         strategy = ModelParallelStrategy(
             parallelize_fn=(lambda m, _: m),
@@ -127,6 +127,8 @@ def _parallelize_feed_forward_fsdp2_tp(model, device_mesh):
 
 @RunIf(min_torch="2.3", standalone=True, min_cuda_gpus=2)
 def test_tensor_parallel():
+    from torch.distributed._tensor import DTensor
+
     strategy = ModelParallelStrategy(parallelize_fn=_parallelize_feed_forward_tp)
     fabric = Fabric(accelerator="auto", devices=2, strategy=strategy)
     fabric.launch()
@@ -164,6 +166,8 @@ def test_tensor_parallel():
 
 @RunIf(min_torch="2.3", standalone=True, min_cuda_gpus=4)
 def test_fsdp2_tensor_parallel():
+    from torch.distributed._tensor import DTensor
+
     strategy = ModelParallelStrategy(
         parallelize_fn=_parallelize_feed_forward_fsdp2_tp,
         data_parallel_size=2,
@@ -305,6 +309,8 @@ def test_train_save_load(precision, tmp_path):
 def test_setup_module_move_to_device(fabric_module_mock, move_to_device):
     """Test that `move_to_device` does nothing, ModelParallel decides which device parameters get moved to which device
     (sharding)."""
+    from torch.distributed._tensor import DTensor
+
     strategy = ModelParallelStrategy(parallelize_fn=_parallelize_feed_forward_fsdp2)
     fabric = Fabric(accelerator="cuda", devices=2, strategy=strategy)
     fabric.launch()
