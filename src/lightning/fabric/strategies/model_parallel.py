@@ -15,12 +15,11 @@ import itertools
 from contextlib import ExitStack
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, Callable, ContextManager, Dict, Literal, Optional, TypeVar, Union
+from typing import Any, Callable, ContextManager, Dict, Literal, Optional, TypeVar, Union, TYPE_CHECKING
 
 import torch
 from lightning_utilities.core.rank_zero import rank_zero_only as utils_rank_zero_only
 from torch import Tensor
-from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
 from torch.nn import Module
 from torch.optim import Optimizer
 from typing_extensions import override
@@ -34,10 +33,7 @@ from lightning.fabric.strategies.fsdp import (
 )
 from lightning.fabric.strategies.launchers.subprocess_script import _SubprocessScriptLauncher
 from lightning.fabric.strategies.parallel import ParallelStrategy
-from lightning.fabric.strategies.strategy import (
-    TBroadcast,
-    _BackwardSyncControl,
-)
+from lightning.fabric.strategies.strategy import TBroadcast, _BackwardSyncControl
 from lightning.fabric.utilities.distributed import (
     ReduceOp,
     _distributed_is_initialized,
@@ -50,6 +46,9 @@ from lightning.fabric.utilities.imports import _TORCH_GREATER_EQUAL_2_3
 from lightning.fabric.utilities.rank_zero import rank_zero_only, rank_zero_warn
 from lightning.fabric.utilities.seed import reset_seed
 from lightning.fabric.utilities.types import _PATH
+
+if TYPE_CHECKING:
+    from torch.distributed.device_mesh import DeviceMesh
 
 TModel = TypeVar("TModel", bound=Module)
 
@@ -74,7 +73,7 @@ class ModelParallelStrategy(ParallelStrategy):
 
     def __init__(
         self,
-        parallelize_fn: Callable[[TModel, DeviceMesh], TModel],
+        parallelize_fn: Callable[[TModel, "DeviceMesh"], TModel],
         data_parallel_size: Union[Literal["auto"], int] = "auto",
         tensor_parallel_size: Union[Literal["auto"], int] = "auto",
         process_group_backend: Optional[str] = None,
@@ -91,10 +90,10 @@ class ModelParallelStrategy(ParallelStrategy):
         self._timeout: Optional[timedelta] = timeout
         self._backward_sync_control = _ParallelBackwardSyncControl()
 
-        self._device_mesh: Optional[DeviceMesh] = None
+        self._device_mesh: Optional["DeviceMesh"] = None
 
     @property
-    def device_mesh(self) -> DeviceMesh:
+    def device_mesh(self) -> "DeviceMesh":
         if self._device_mesh is None:
             raise RuntimeError("Accessing the device mesh before processes have initialized is not allowed.")
         return self._device_mesh
@@ -249,6 +248,8 @@ class ModelParallelStrategy(ParallelStrategy):
         _init_dist_connection(self.cluster_environment, self._process_group_backend, timeout=self._timeout)
 
     def _setup_device_mesh(self) -> None:
+        from torch.distributed.device_mesh import init_device_mesh
+
         if self._data_parallel_size == "auto":
             self._data_parallel_size = self.num_nodes
         if self._tensor_parallel_size == "auto":
